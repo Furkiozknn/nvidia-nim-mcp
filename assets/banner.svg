@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360">
   <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
-      <stop offset="0%" stop-color="#0f1a08"/>
-      <stop offset="60%" stop-color="#0a1206"/>
+    <radialGradient id="bg" cx="50%" cy="38%" r="85%">
+      <stop offset="0%" stop-color="#122006"/>
+      <stop offset="55%" stop-color="#0a1206"/>
       <stop offset="100%" stop-color="#050a03"/>
     </radialGradient>
     <linearGradient id="title" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -14,37 +14,56 @@
       <feGaussianBlur stdDeviation="7" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0 L0 0 0 42" fill="none" stroke="#76b900" stroke-width="0.6"/>
+    </pattern>
   </defs>
 
-  <rect width="1200" height="340" fill="url(#bg)"/>
+  <rect width="1200" height="360" fill="url(#bg)"/>
+  <rect width="1200" height="360" fill="url(#grid)" opacity="0.08"/>
+  <rect width="1200" height="360" fill="url(#bg)" opacity="0.35"/>
 
-  <!-- node/fallback-chain motif -->
+  <!-- node/fallback-chain motif, left -->
   <g stroke="#76b900" stroke-width="2.5" fill="none" opacity="0.6" filter="url(#glow)">
-    <line x1="90" y1="90" x2="220" y2="150"/>
-    <line x1="220" y1="150" x2="90" y2="230"/>
-    <line x1="220" y1="150" x2="330" y2="150"/>
+    <line x1="90" y1="98" x2="220" y2="158"/>
+    <line x1="220" y1="158" x2="90" y2="238"/>
+    <line x1="220" y1="158" x2="330" y2="158"/>
   </g>
   <g fill="#a6ff4d" filter="url(#glow)">
-    <circle cx="90" cy="90" r="7"/>
-    <circle cx="90" cy="230" r="7"/>
-    <circle cx="220" cy="150" r="9"/>
-    <circle cx="330" cy="150" r="7"/>
+    <circle cx="90" cy="98" r="7"/>
+    <circle cx="90" cy="238" r="7"/>
+    <circle cx="220" cy="158" r="9"/>
+    <circle cx="330" cy="158" r="7"/>
   </g>
+
+  <!-- node/fallback-chain motif, right -->
   <g stroke="#76b900" stroke-width="2.5" fill="none" opacity="0.6" filter="url(#glow)">
-    <line x1="1110" y1="90" x2="980" y2="150"/>
-    <line x1="980" y1="150" x2="1110" y2="230"/>
-    <line x1="980" y1="150" x2="870" y2="150"/>
+    <line x1="1110" y1="98" x2="980" y2="158"/>
+    <line x1="980" y1="158" x2="1110" y2="238"/>
+    <line x1="980" y1="158" x2="870" y2="158"/>
   </g>
   <g fill="#a6ff4d" filter="url(#glow)">
-    <circle cx="1110" cy="90" r="7"/>
-    <circle cx="1110" cy="230" r="7"/>
-    <circle cx="980" cy="150" r="9"/>
-    <circle cx="870" cy="150" r="7"/>
+    <circle cx="1110" cy="98" r="7"/>
+    <circle cx="1110" cy="238" r="7"/>
+    <circle cx="980" cy="158" r="9"/>
+    <circle cx="870" cy="158" r="7"/>
   </g>
 
-  <text x="600" y="155" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', monospace" font-weight="700" font-size="60" fill="url(#title)" letter-spacing="1">nvidia-nim-mcp</text>
+  <!-- MCP SERVER pill -->
+  <g filter="url(#softGlow)">
+    <rect x="500" y="34" width="200" height="26" rx="13" fill="#0f1a08" stroke="#76b900" stroke-width="1.4" opacity="0.9"/>
+  </g>
+  <text x="600" y="51" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="12.5" letter-spacing="2" fill="#c8ff8a">MCP SERVER · FREE TIER</text>
 
-  <text x="600" y="197" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="18" fill="#d8f0c0" opacity="0.85">Free-tier NVIDIA NIM models for Claude Code — with automatic fallback</text>
+  <text x="600" y="168" text-anchor="middle" font-family="'Cascadia Code', 'Consolas', monospace" font-weight="700" font-size="58" fill="url(#title)" letter-spacing="1">nvidia-nim-mcp</text>
 
-  <text x="600" y="260" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="22" fill="#eafce0" opacity="0.95">🖼️ Image Gen &#160;&#160;&#160; 🌐 Translate &#160;&#160;&#160; 💬 LLM Chat &#160;&#160;&#160; 👁️ Vision &#160;&#160;&#160; 🛡️ Safety &#160;&#160;&#160; 🔗 Embeddings</text>
+  <text x="600" y="208" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="17.5" fill="#d8f0c0" opacity="0.9">Free-tier NVIDIA NIM models for Claude Code — with automatic multi-provider fallback</text>
+
+  <text x="600" y="270" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="21" fill="#eafce0" opacity="0.95">🖼️ Image Gen &#160;&#160;&#160; 🌐 Translate &#160;&#160;&#160; 💬 LLM Chat &#160;&#160;&#160; 👁️ Vision &#160;&#160;&#160; 🛡️ Safety &#160;&#160;&#160; 🔗 Embeddings</text>
+
+  <text x="600" y="330" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="12.5" fill="#7fae4c" opacity="0.55">github.com/Furkiozknn/nvidia-nim-mcp</text>
 </svg>

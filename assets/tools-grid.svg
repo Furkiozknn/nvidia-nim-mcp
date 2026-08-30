@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400">
+  <defs>
+    <radialGradient id="bg3" cx="50%" cy="30%" r="90%">
+      <stop offset="0%" stop-color="#122006"/>
+      <stop offset="55%" stop-color="#0a1206"/>
+      <stop offset="100%" stop-color="#050a03"/>
+    </radialGradient>
+    <radialGradient id="iconGrad" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#c8ff8a"/>
+      <stop offset="55%" stop-color="#76b900"/>
+      <stop offset="100%" stop-color="#2f4a10"/>
+    </radialGradient>
+    <filter id="glow3" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow3" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid3" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0 L0 0 0 42" fill="none" stroke="#76b900" stroke-width="0.6"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="400" fill="url(#bg3)"/>
+  <rect width="1200" height="400" fill="url(#grid3)" opacity="0.07"/>
+
+  <!-- Card template repeated x6: icon circle + name + description -->
+
+  <!-- Card 1: generate_image -->
+  <g filter="url(#softGlow3)">
+    <rect x="30" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
+  </g>
+  <circle cx="90" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="90" y="102" text-anchor="middle" font-size="30">🖼️</text>
+  <text x="136" y="82" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">generate_image()</text>
+  <text x="136" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Text-to-image via FLUX models,</text>
+  <text x="136" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">saved locally to output/</text>
+  <text x="60" y="160" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#7fae4c" opacity="0.8">flux.1-dev → flux.2-klein-4b</text>
+
+  <!-- Card 2: translate_text -->
+  <g filter="url(#softGlow3)">
+    <rect x="420" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
+  </g>
+  <circle cx="480" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="480" y="102" text-anchor="middle" font-size="30">🌐</text>
+  <text x="526" y="82" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">translate_text()</text>
+  <text x="526" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Translation with automatic</text>
+  <text x="526" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">model + provider fallback</text>
+  <text x="450" y="160" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#c8ff8a" opacity="0.9">+ Groq/Mistral/Gemini/Cerebras</text>
+
+  <!-- Card 3: ask_llm -->
+  <g filter="url(#softGlow3)">
+    <rect x="810" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
+  </g>
+  <circle cx="870" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="870" y="102" text-anchor="middle" font-size="30">💬</text>
+  <text x="916" y="82" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">ask_llm()</text>
+  <text x="916" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Second opinion from a</text>
+  <text x="916" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">non-Anthropic model</text>
+  <text x="840" y="160" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#c8ff8a" opacity="0.9">+ Groq/Mistral/Gemini/Cerebras</text>
+
+  <!-- Card 4: describe_image -->
+  <g filter="url(#softGlow3)">
+    <rect x="30" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
+  </g>
+  <circle cx="90" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="90" y="287" text-anchor="middle" font-size="30">👁️</text>
+  <text x="136" y="267" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">describe_image()</text>
+  <text x="136" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Vision-language description</text>
+  <text x="136" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">of a local image file</text>
+  <text x="60" y="345" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#7fae4c" opacity="0.8">nemotron-nano-12b-v2-vl → llama-3.2-11b-vision</text>
+
+  <!-- Card 5: check_content_safety -->
+  <g filter="url(#softGlow3)">
+    <rect x="420" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
+  </g>
+  <circle cx="480" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="480" y="287" text-anchor="middle" font-size="30">🛡️</text>
+  <text x="526" y="267" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">check_content_safety()</text>
+  <text x="526" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Safe/unsafe verdict on a</text>
+  <text x="526" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">piece of text</text>
+  <text x="450" y="345" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#7fae4c" opacity="0.8">nemotron-3.5-content-safety</text>
+
+  <!-- Card 6: create_embedding -->
+  <g filter="url(#softGlow3)">
+    <rect x="810" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
+  </g>
+  <circle cx="870" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
+  <text x="870" y="287" text-anchor="middle" font-size="30">🔗</text>
+  <text x="916" y="267" font-family="'Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">create_embedding()</text>
+  <text x="916" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Semantic embedding vector,</text>
+  <text x="916" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">saved to output/*.json</text>
+  <text x="840" y="345" font-family="'Cascadia Code','Consolas',monospace" font-size="10.5" fill="#7fae4c" opacity="0.8">nemotron-3-embed-1b</text>
+</svg>

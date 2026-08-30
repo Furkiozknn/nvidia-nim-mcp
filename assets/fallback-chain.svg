@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 800" width="1320" height="800">
+  <defs>
+    <radialGradient id="bg2" cx="50%" cy="30%" r="90%">
+      <stop offset="0%" stop-color="#122006"/>
+      <stop offset="55%" stop-color="#0a1206"/>
+      <stop offset="100%" stop-color="#050a03"/>
+    </radialGradient>
+    <linearGradient id="title2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a6ff4d"/>
+      <stop offset="55%" stop-color="#76b900"/>
+      <stop offset="100%" stop-color="#c8ff8a"/>
+    </linearGradient>
+    <filter id="glow2" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softGlow2" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid2" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0 L0 0 0 42" fill="none" stroke="#76b900" stroke-width="0.6"/>
+    </pattern>
+    <marker id="arrow2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a6ff4d"/>
+    </marker>
+  </defs>
+
+  <rect width="1320" height="800" fill="url(#bg2)"/>
+  <rect width="1320" height="800" fill="url(#grid2)" opacity="0.07"/>
+
+  <!-- title -->
+  <text x="660" y="46" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-weight="700" font-size="30" fill="url(#title2)">Fallback Chain</text>
+  <text x="660" y="72" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13.5" fill="#cfe8b0" opacity="0.8">Traced from nvidia_image.py — what actually happens when a tool is called</text>
+
+  <!-- node: Claude Code -->
+  <g filter="url(#softGlow2)">
+    <rect x="60" y="108" width="240" height="64" rx="12" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
+  </g>
+  <text x="180" y="134" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="15" font-weight="700" fill="#eafce0">Claude Code</text>
+  <text x="180" y="154" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">the caller</text>
+
+  <line x1="300" y1="140" x2="366" y2="140" stroke="#76b900" stroke-width="2.4" marker-end="url(#arrow2)"/>
+
+  <!-- node: MCP tool call -->
+  <g filter="url(#softGlow2)">
+    <rect x="370" y="108" width="290" height="64" rx="12" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
+  </g>
+  <text x="515" y="134" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="15" font-weight="700" fill="#eafce0">MCP tool call</text>
+  <text x="515" y="154" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">one of the 6 tools below</text>
+
+  <!-- branch lines -->
+  <path d="M515,172 L515,196 L330,196 L330,214" fill="none" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+  <path d="M515,172 L515,196 L990,196 L990,214" fill="none" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <!-- ===== LANE A (NVIDIA-only tools) ===== -->
+  <rect x="110" y="216" width="440" height="34" rx="8" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.4" opacity="0.9"/>
+  <text x="330" y="238" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="12" fill="#cfe8b0">generate_image · describe_image · check_content_safety · create_embedding</text>
+
+  <line x1="330" y1="250" x2="330" y2="270" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <g filter="url(#softGlow2)">
+    <rect x="110" y="272" width="440" height="86" rx="12" fill="#0f1a08" stroke="#76b900" stroke-width="1.8"/>
+  </g>
+  <text x="330" y="300" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="14.5" font-weight="700" fill="#eafce0">NVIDIA NIM model chain</text>
+  <text x="330" y="320" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">1–2 models, tried in order (see Tools table)</text>
+  <text x="330" y="340" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">e.g. flux.1-dev → flux.2-klein-4b</text>
+
+  <line x1="330" y1="358" x2="330" y2="382" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <rect x="110" y="384" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
+  <text x="330" y="408" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">✓ success at any model → result returned</text>
+  <text x="330" y="430" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ all fail → explicit error text, no other provider tried</text>
+
+  <!-- ===== LANE B (cross-provider tools) — the star lane ===== -->
+  <rect x="750" y="216" width="440" height="34" rx="8" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8" filter="url(#softGlow2)"/>
+  <text x="970" y="238" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">translate_text · ask_llm</text>
+
+  <line x1="970" y1="250" x2="970" y2="270" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <g filter="url(#softGlow2)">
+    <rect x="750" y="272" width="440" height="86" rx="12" fill="#0f1a08" stroke="#76b900" stroke-width="1.8"/>
+  </g>
+  <text x="970" y="300" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="14.5" font-weight="700" fill="#eafce0">NVIDIA NIM model chain</text>
+  <text x="970" y="320" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">2–3 models, tried in order (see Tools table)</text>
+  <text x="970" y="340" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">e.g. riva-translate-4b → nemotron-super-49b → gpt-oss-120b</text>
+
+  <line x1="970" y1="358" x2="970" y2="376" stroke="#a6ff4d" stroke-width="2.4" stroke-dasharray="6,5" marker-end="url(#arrow2)"/>
+  <text x="1055" y="371" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" fill="#c8ff8a" opacity="0.9">if every NVIDIA model fails</text>
+
+  <!-- extra-provider chip chain -->
+  <g filter="url(#softGlow2)">
+    <rect x="755" y="382" width="108" height="76" rx="10" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.6"/>
+  </g>
+  <text x="809" y="405" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Groq</text>
+  <text x="809" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">gpt-oss-120b</text>
+  <text x="809" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 GROQ_API_KEY</text>
+
+  <line x1="863" y1="420" x2="887" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <g filter="url(#softGlow2)">
+    <rect x="889" y="382" width="108" height="76" rx="10" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.6"/>
+  </g>
+  <text x="943" y="405" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Mistral</text>
+  <text x="943" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">mistral-small</text>
+  <text x="943" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 MISTRAL_API_KEY</text>
+
+  <line x1="997" y1="420" x2="1021" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <g filter="url(#softGlow2)">
+    <rect x="1023" y="382" width="108" height="76" rx="10" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.6"/>
+  </g>
+  <text x="1077" y="405" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Gemini</text>
+  <text x="1077" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">flash-latest</text>
+  <text x="1077" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 GEMINI_API_KEY</text>
+
+  <line x1="1131" y1="420" x2="1155" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
+
+  <g filter="url(#softGlow2)">
+    <rect x="1157" y="382" width="108" height="76" rx="10" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.6"/>
+  </g>
+  <text x="1211" y="405" text-anchor="middle" font-family="'Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Cerebras</text>
+  <text x="1211" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">gpt-oss-120b</text>
+  <text x="1211" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 CEREBRAS_API_KEY</text>
+
+  <text x="970" y="472" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="10.5" fill="#7fae4c" opacity="0.85">each provider is tried only if its key is set — unset keys are skipped silently, no code changes needed</text>
+
+  <line x1="970" y1="480" x2="970" y2="502" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <rect x="750" y="504" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
+  <text x="970" y="528" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">✓ success at any step → result returned</text>
+  <text x="970" y="550" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ everything fails → explicit error text</text>
+
+  <!-- footer note -->
+  <line x1="60" y1="604" x2="1260" y2="604" stroke="#3f5a26" stroke-width="1"/>
+  <text x="660" y="630" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#cfe8b0" opacity="0.85">Either way, Claude Code always gets back a plain string — either the result, or a clear failure message. Nothing ever throws.</text>
+
+  <!-- legend -->
+  <g font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">
+    <line x1="150" y1="672" x2="190" y2="672" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+    <text x="200" y="676">tried in sequence</text>
+
+    <line x1="420" y1="672" x2="460" y2="672" stroke="#a6ff4d" stroke-width="2.2" stroke-dasharray="6,5" marker-end="url(#arrow2)"/>
+    <text x="470" y="676">only attempted if everything above failed</text>
+
+    <text x="820" y="676">🔑 gated by an .env key — skipped silently if unset</text>
+  </g>
+
+  <text x="1260" y="770" text-anchor="end" font-family="'Cascadia Code','Consolas',monospace" font-size="11" fill="#7fae4c" opacity="0.45">nvidia_image.py</text>
+</svg>
