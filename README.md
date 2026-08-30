@@ -11,7 +11,7 @@
 
 # nvidia-nim-mcp
 
-An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, and embeddings — behind one small, consistent set of tools.
+An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, and embeddings — behind six small, consistent tools.
 
 The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and two of them — translation and the "ask another LLM" tool — keep going past NVIDIA into whichever free-tier providers you've configured (Groq, Mistral, Gemini, Cerebras). The caller never has to know or care which model actually answered.
 
