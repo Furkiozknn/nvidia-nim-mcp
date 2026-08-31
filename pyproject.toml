@@ -10,3 +10,13 @@ dependencies = [
     "litellm>=1.97.0",
     "mcp[cli]>=2.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]

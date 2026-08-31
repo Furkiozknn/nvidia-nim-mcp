@@ -11,7 +11,7 @@
 
 # nvidia-nim-mcp
 
-An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, and embeddings — behind six small, consistent tools.
+An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, embeddings, and a provider health check — behind seven small, consistent tools.
 
 The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and two of them — translation and the "ask another LLM" tool — keep going past NVIDIA into whichever free-tier providers you've configured (Groq, Mistral, Gemini, Cerebras). The caller never has to know or care which model actually answered.
 
@@ -24,6 +24,7 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 - [Setup](#-setup)
 - [Example usage](#-example-usage)
 - [Output files](#-output-files)
+- [Development](#-development)
 - [Project layout](#-project-layout)
 - [License](#-license)
 
@@ -31,7 +32,7 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 
 ![Tool grid](assets/tools-grid.svg)
 
-Six tools, each backed by its own model chain. The two marked **✓** below also cross into other free-tier providers if NVIDIA runs dry — see [The fallback chain](#-the-fallback-chain) for exactly how that decision is made.
+Seven tools. Six are backed by their own model chain; the seventh checks the health of every model the other six actually use. The two marked **✓** below also cross into other free-tier providers if NVIDIA runs dry — see [The fallback chain](#-the-fallback-chain) for exactly how that decision is made.
 
 | Tool | What it does | NVIDIA model chain (in order) | Cross-provider fallback |
 |---|---|---|---|
@@ -41,8 +42,9 @@ Six tools, each backed by its own model chain. The two marked **✓** below also
 | 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | — |
 | 🛡️ `check_content_safety` | Safe/unsafe verdict on a piece of text | `nemotron-3.5-content-safety` | — |
 | 🔗 `create_embedding` | Semantic embedding vector, saved to `output/` | `nemotron-3-embed-1b` | — |
+| 🩺 `check_provider_health` | Liveness probe for every model above, without generating real content | every model used by the other six, concurrently | ✓ (checks configured extras too) |
 
-Every model in these chains was confirmed working with a real request before being wired in — see the comments at the top of `nvidia_image.py` for the verification notes (including two models that were removed after NVIDIA retired them outright, HTTP 410).
+Every model in these chains was confirmed working with a real request before being wired in — see the comments at the top of `nvidia_image.py` for the verification notes (including two models that were removed after NVIDIA retired them outright, HTTP 410). `check_provider_health` exists precisely because that kind of silent retirement keeps happening — run it to see what's actually alive right now instead of finding out mid-request.
 
 ## 🔄 The fallback chain
 
@@ -52,7 +54,7 @@ This is the one feature worth understanding properly, because it's not the same 
 
 **In short:**
 
-1. **All six tools** try their NVIDIA models first, in the order shown in the table above. The first one that answers wins.
+1. **All six generation tools** try their NVIDIA models first, in the order shown in the table above. The first one that answers wins. (`check_provider_health` is different — it probes every model instead of stopping at the first success; see its row above.)
 2. **Only `translate_text` and `ask_llm`** keep going if every NVIDIA model in their chain fails. They fall through to whichever of these you've configured, in this fixed order:
 
    | Order | Provider | Model | Gate |
@@ -103,7 +105,7 @@ Only `NVIDIA_API_KEY` is required. Get one for free at [build.nvidia.com](https:
 claude mcp add --transport stdio nvidia-nim -- uv run --project /path/to/this/repo nvidia_image.py
 ```
 
-That's it — `nvidia-nim`'s six tools are now available to Claude Code in any session where the server is registered.
+That's it — `nvidia-nim`'s seven tools are now available to Claude Code in any session where the server is registered.
 
 ## ▶️ Example usage
 
@@ -127,19 +129,33 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 
 "Create an embedding for this paragraph so I can search similar ones later"
 → create_embedding → saved to output/embedding_20260830_153000.json
+
+"Which of the NVIDIA models are actually working right now?"
+→ check_provider_health → per-model OK/FAIL report across all 6 tools' chains
 ```
 
 ## 📁 Output files
 
 `generate_image` and `create_embedding` write to `output/` in the project root (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Every other tool returns its result directly as text, with the model that answered noted at the end.
 
+## 🛠 Development
+
+```bash
+uv sync --group dev
+uv run pytest
+```
+
+The suite (`tests/`) mocks every HTTP/litellm call — no `NVIDIA_API_KEY` or real network access needed to run it. It covers the fallback-chain ordering, the cross-provider gating logic, the `.env`-not-set guard on each tool, and `check_provider_health`'s per-model OK/FAIL reporting (including that one dead model never hides the others' status). CI (`.github/workflows/ci.yml`) runs the same command on every push/PR.
+
 ## 🗂 Project layout
 
 ```
 nvidia-nim-mcp/
-├── nvidia_image.py     # the MCP server — all 6 tools live here
+├── nvidia_image.py     # the MCP server — all 7 tools live here
+├── tests/               # pytest suite, fully mocked, no API key needed
 ├── pyproject.toml      # uv project + dependencies (httpx, litellm, mcp)
 ├── .env.example        # copy to .env and fill in your keys
+├── .github/workflows/  # CI: uv sync --group dev && uv run pytest
 ├── output/             # generated images + embeddings land here
 └── assets/             # banner, fallback diagram, tool grid (this README's visuals)
 ```

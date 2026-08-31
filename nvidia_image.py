@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import logging
@@ -138,6 +139,74 @@ async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], mes
             continue
         return content, model
     return None
+
+
+# Short timeout for health probes specifically - these are meant to be a
+# quick "is it alive" check, not a real request, so failing fast is correct.
+HEALTH_PROBE_TIMEOUT = 8.0
+
+
+async def _probe_nvidia_chat_model(client: httpx2.AsyncClient, model: str) -> tuple[bool, str]:
+    """Cheap liveness probe for one NVIDIA chat-completions model: a
+    single-token reply, not a real generation."""
+    body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
+    try:
+        resp = await client.post(CHAT_URL, headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+    except httpx2.TimeoutException:
+        return False, "timed out"
+    except Exception as e:
+        return False, f"error: {e}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    return True, "ok"
+
+
+async def _probe_nvidia_image_model(client: httpx2.AsyncClient, slug: str) -> tuple[bool, str]:
+    """Cheap liveness probe for one NVIDIA image model: a single-step,
+    tiny-resolution generation instead of a full-quality image."""
+    body = {"prompt": "hi", "steps": 1, "cfg_scale": 1, "seed": 0, "width": 64, "height": 64}
+    try:
+        resp = await client.post(f"{GENAI_BASE}/{slug}", headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+    except httpx2.TimeoutException:
+        return False, "timed out"
+    except Exception as e:
+        return False, f"error: {e}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    return True, "ok"
+
+
+async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> tuple[bool, str]:
+    """Cheap liveness probe for the NVIDIA embedding model: a one-word input."""
+    body = {"input": ["hi"], "model": model, "input_type": "query"}
+    try:
+        resp = await client.post(EMBED_URL, headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+    except httpx2.TimeoutException:
+        return False, "timed out"
+    except Exception as e:
+        return False, f"error: {e}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    return True, "ok"
+
+
+async def _probe_extra_provider(provider: dict) -> tuple[bool, str]:
+    """Cheap liveness probe for one cross-provider fallback model. Skipped
+    (not an error) if its API key isn't set in .env."""
+    key = os.environ.get(provider["env"])
+    if not key:
+        return False, "not configured"
+    try:
+        await litellm.acompletion(
+            model=provider["model"],
+            api_key=key,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+            timeout=HEALTH_PROBE_TIMEOUT,
+        )
+    except Exception as e:
+        return False, f"error: {e}"
+    return True, "ok"
 
 
 @mcp.tool()
@@ -334,6 +403,63 @@ async def create_embedding(text: str) -> str:
     filepath.write_text(json.dumps({"text": text, "model": EMBED_MODEL, "vector": vector}))
 
     return f"Embedding saved to {filepath} ({len(vector)} dimensions)"
+
+
+@mcp.tool()
+async def check_provider_health() -> str:
+    """Check which configured NVIDIA models and cross-provider fallbacks are
+    currently reachable, without generating any real content.
+
+    Runs a minimal, single-token liveness probe against every unique NVIDIA
+    model used across the other six tools' fallback chains (plus every
+    free-tier provider - Groq/Mistral/Gemini/Cerebras - that has an API key
+    set), all concurrently with a short timeout. Failures are caught and
+    reported per model instead of raising, so one dead model never hides the
+    status of the others. Models get silently rate-limited or retired on
+    NVIDIA's platform without notice - use this to see what's actually alive
+    right now instead of only discovering a dead model when a real request
+    from one of the other tools fails.
+    """
+    if not API_KEY:
+        return "NVIDIA_API_KEY not set in .env - can't call the API."
+
+    chat_models = sorted(set(TRANSLATE_MODELS) | set(LLM_MODELS) | set(VISION_MODELS) | {SAFETY_MODEL})
+    image_slugs = [m["slug"] for m in IMAGE_MODELS]
+
+    async with httpx2.AsyncClient() as client:
+        chat_results, image_results, embed_result, extra_results = await asyncio.gather(
+            asyncio.gather(*(_probe_nvidia_chat_model(client, m) for m in chat_models)),
+            asyncio.gather(*(_probe_nvidia_image_model(client, s) for s in image_slugs)),
+            _probe_nvidia_embed_model(client, EMBED_MODEL),
+            asyncio.gather(*(_probe_extra_provider(p) for p in EXTRA_PROVIDERS)),
+        )
+
+    chat_status = dict(zip(chat_models, chat_results))
+    image_status = dict(zip(image_slugs, image_results))
+
+    def fmt_group(lines: list[str], title: str, models: list[str], status: dict) -> None:
+        lines.append(f"{title}:")
+        for m in models:
+            ok, detail = status[m]
+            lines.append(f"  {'OK ' if ok else 'FAIL'} {m} - {detail}")
+
+    lines: list[str] = ["NVIDIA NIM provider health check:", ""]
+    fmt_group(lines, "generate_image", image_slugs, image_status)
+    fmt_group(lines, "translate_text", TRANSLATE_MODELS, chat_status)
+    fmt_group(lines, "ask_llm", LLM_MODELS, chat_status)
+    fmt_group(lines, "describe_image", VISION_MODELS, chat_status)
+    fmt_group(lines, "check_content_safety", [SAFETY_MODEL], chat_status)
+
+    embed_ok, embed_detail = embed_result
+    lines.append("create_embedding:")
+    lines.append(f"  {'OK ' if embed_ok else 'FAIL'} {EMBED_MODEL} - {embed_detail}")
+
+    lines.append("")
+    lines.append("Cross-provider fallback (translate_text / ask_llm only):")
+    for provider, (ok, detail) in zip(EXTRA_PROVIDERS, extra_results):
+        lines.append(f"  {'OK ' if ok else 'FAIL'} {provider['model']} ({provider['env']}) - {detail}")
+
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
