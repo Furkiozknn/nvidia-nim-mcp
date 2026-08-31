@@ -190,6 +190,27 @@ async def test_check_provider_health_isolates_pollinations_failure_from_nvidia_m
 
 
 @pytest.mark.asyncio
+async def test_check_provider_health_includes_describe_image_vision_fallback_section(
+    nvidia_key, fake_async_client, monkeypatch
+):
+    for provider in nvidia_image.EXTRA_PROVIDERS:
+        monkeypatch.delenv(provider["env"], raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(200),
+        get_side_effect=lambda *a, **kw: FakeResponse(200),
+    )
+    monkeypatch.setattr(nvidia_image.litellm, "acompletion", AsyncMock(return_value=object()))
+
+    report = await nvidia_image.check_provider_health()
+
+    assert "Cross-provider fallback (describe_image only):" in report
+    assert "groq/qwen/qwen3.6-27b (GROQ_API_KEY)" in report
+    # Unconfigured vision providers show up as "not configured", isolated from the rest.
+    assert "not configured" in report.split("Cross-provider fallback (describe_image only):")[1]
+
+
+@pytest.mark.asyncio
 async def test_check_provider_health_does_not_raise_on_total_network_failure(
     nvidia_key, fake_async_client, monkeypatch
 ):

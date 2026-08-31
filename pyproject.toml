@@ -11,6 +11,15 @@ dependencies = [
     "mcp[cli]>=2.0.0",
 ]
 
+[project.optional-dependencies]
+# Opt-in, fully local/keyless fallback for create_embedding when the NVIDIA
+# endpoint fails. Not a base dependency: sentence-transformers pulls in
+# torch (~1GB+ CPU wheel), too heavy to force on every install for a path
+# most calls will never take. Enable with `uv sync --extra local-embeddings`.
+local-embeddings = [
+    "sentence-transformers>=3.0.0",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",

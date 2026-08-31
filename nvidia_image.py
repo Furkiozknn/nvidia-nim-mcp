@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import threading
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -106,9 +107,11 @@ def _build_chat_chain(nvidia_models: list[str]) -> list[dict]:
     return chain
 
 
-async def _multi_provider_chat(nvidia_models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
-    """Try NVIDIA models, then any configured free-tier provider, in order."""
-    chain = _build_chat_chain(nvidia_models)
+async def _run_chat_chain(chain: list[dict], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+    """Execute a pre-built litellm provider chain (primary + fallbacks).
+    Shared by _multi_provider_chat (NVIDIA-prefixed) and
+    _chat_via_provider_chain (cross-provider only) so the actual
+    execution/error-handling logic exists in exactly one place."""
     if not chain:
         return None
     primary, fallbacks = chain[0], chain[1:]
@@ -124,13 +127,82 @@ async def _multi_provider_chat(nvidia_models: list[str], messages: list[dict], m
         return None
     return response.choices[0].message.content, response.model
 
+
+async def _multi_provider_chat(nvidia_models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+    """Try NVIDIA models, then any configured free-tier provider, in order."""
+    return await _run_chat_chain(_build_chat_chain(nvidia_models), messages, max_tokens)
+
 VISION_MODELS = [
     "nvidia/nemotron-nano-12b-v2-vl",
     "meta/llama-3.2-11b-vision-instruct",
 ]
 
+# Vision-capable free-tier fallback for describe_image, tried only after both
+# NVIDIA_MODELS above fail. A separate list from EXTRA_PROVIDERS because not
+# every model there is vision-capable (Groq's gpt-oss-120b and Mistral's
+# mistral-small are text-only) - these are vision-specific model names for
+# the same three providers, confirmed 2026-08-31. Model names on free/preview
+# tiers drift fast (Groq alone has retired two prior vision picks this year) -
+# expect to revisit.
+VISION_PROVIDERS = [
+    {"env": "GROQ_API_KEY", "model": "groq/qwen/qwen3.6-27b"},
+    {"env": "MISTRAL_API_KEY", "model": "mistral/pixtral-12b-2409"},
+    {"env": "GEMINI_API_KEY", "model": "gemini/gemini-flash-latest"},
+]
+
 EMBED_MODEL = "nvidia/nemotron-3-embed-1b"
 SAFETY_MODEL = "nvidia/nemotron-3.5-content-safety"
+
+# Fully local, keyless embedding fallback for create_embedding - only used if
+# the NVIDIA endpoint fails. Deliberately an *optional* dependency (`pip
+# install .[local-embeddings]` / `uv sync --extra local-embeddings`): the
+# sentence-transformers package pulls in torch, ~1GB+, too heavy to force on
+# every install just for a fallback path most calls will never need.
+_LOCAL_EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
+_local_embed_model = None  # lazy singleton - only loaded the first time it's actually needed
+# create_embedding runs _local_embedding via asyncio.to_thread, so concurrent
+# calls can land on different real OS threads - a plain "is None" check alone
+# would let two threads both start loading the ~90MB model at once. A
+# threading.Lock (not asyncio.Lock, which wouldn't cross thread-pool workers)
+# makes the load-once check race-free.
+_local_embed_lock = threading.Lock()
+
+
+def _local_embedding(text: str) -> list[float] | None:
+    """Compute an embedding locally via sentence-transformers, if installed.
+    Returns None (never raises) if the optional dependency is missing or the
+    model fails to load/run, so the caller can report a clean error."""
+    global _local_embed_model
+    try:
+        if _local_embed_model is None:
+            with _local_embed_lock:
+                if _local_embed_model is None:
+                    from sentence_transformers import SentenceTransformer
+
+                    _local_embed_model = SentenceTransformer(_LOCAL_EMBED_MODEL_NAME)
+        return _local_embed_model.encode(text).tolist()
+    except Exception as e:
+        logger.warning("local embedding fallback unavailable: %s", e)
+        return None
+
+
+def _build_provider_chain(providers: list[dict]) -> list[dict]:
+    """Chain of {model, api_key} entries for whichever of `providers` has its
+    API key actually present in the environment right now - same
+    skip-silently-if-unconfigured rule as _build_chat_chain, but for a
+    provider list with no NVIDIA-model prefix of its own."""
+    chain = []
+    for provider in providers:
+        key = os.environ.get(provider["env"])
+        if key:
+            chain.append({"model": provider["model"], "api_key": key})
+    return chain
+
+
+async def _chat_via_provider_chain(providers: list[dict], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+    """Try each configured provider in `providers`, in declared order, via
+    litellm. Returns None if none are configured or all fail - never raises."""
+    return await _run_chat_chain(_build_provider_chain(providers), messages, max_tokens)
 
 
 async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
@@ -378,6 +450,9 @@ async def ask_llm(question: str, system_prompt: str | None = None) -> str:
 async def describe_image(image_path: str, question: str = "Describe this image in detail.") -> str:
     """Analyze/describe a local image using an NVIDIA NIM vision-language model.
 
+    Falls back to a free-tier vision-capable provider (Groq/Mistral/Gemini,
+    whichever is configured in .env) if both NVIDIA vision models fail.
+
     Args:
         image_path: Absolute path to a local image file (jpg/png).
         question: What to ask about the image.
@@ -407,6 +482,9 @@ async def describe_image(image_path: str, question: str = "Describe this image i
         result = await _chat_with_fallback(client, VISION_MODELS, messages, max_tokens=512)
 
     if result is None:
+        result = await _chat_via_provider_chain(VISION_PROVIDERS, messages, max_tokens=512)
+
+    if result is None:
         return "All vision models failed or timed out."
     content, model = result
     return f"{content}\n\n(model: {model})"
@@ -419,6 +497,12 @@ async def check_content_safety(text: str) -> str:
     Useful before publishing user-generated content, comments, or chat messages
     in a project. Returns the model's safe/unsafe verdict.
 
+    Falls back to a best-effort classification prompt sent to a general-purpose
+    free-tier chat model (Groq/Mistral/Gemini/Cerebras, whichever is configured)
+    if the dedicated NVIDIA safety model fails - clearly labeled as a fallback
+    verdict, since a general chat model is less calibrated for this than a
+    purpose-built classifier.
+
     Args:
         text: The text to check.
     """
@@ -429,10 +513,27 @@ async def check_content_safety(text: str) -> str:
     async with httpx2.AsyncClient() as client:
         result = await _chat_with_fallback(client, [SAFETY_MODEL], messages, max_tokens=100)
 
-    if result is None:
+    if result is not None:
+        content, _ = result
+        return content
+
+    fallback_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Classify the following user-supplied text as SAFE or UNSAFE "
+                "(hate speech, harassment, sexual content involving minors, "
+                "violent extremism, or comparable serious harms). Respond "
+                "with only the verdict word and a one-line reason."
+            ),
+        },
+        {"role": "user", "content": text},
+    ]
+    fallback_result = await _chat_via_provider_chain(EXTRA_PROVIDERS, fallback_messages, max_tokens=100)
+    if fallback_result is None:
         return "Content safety check failed."
-    content, _ = result
-    return content
+    content, model = fallback_result
+    return f"{content}\n\n(best-effort fallback verdict from {model}, not the dedicated NVIDIA safety model)"
 
 
 @mcp.tool()
@@ -442,6 +543,11 @@ async def create_embedding(text: str) -> str:
     Saves the vector to a local JSON file (too large to return inline) and
     reports its dimensionality.
 
+    Falls back to a fully local, keyless embedding model (sentence-transformers'
+    all-MiniLM-L6-v2) if the NVIDIA endpoint fails - only available if the
+    optional `local-embeddings` extra is installed (`uv sync --extra
+    local-embeddings`); otherwise the failure is reported plainly.
+
     Args:
         text: The text to embed.
     """
@@ -449,24 +555,38 @@ async def create_embedding(text: str) -> str:
         return "NVIDIA_API_KEY not set in .env - can't call the API."
 
     body = {"input": [text], "model": EMBED_MODEL, "input_type": "query"}
+    resp = None
+    request_error = None
     async with httpx2.AsyncClient() as client:
         try:
             resp = await client.post(EMBED_URL, headers=HEADERS, json=body, timeout=30.0)
-        except httpx2.TimeoutException:
-            return f"{EMBED_MODEL}: timed out"
+        except Exception as e:
+            # Broad on purpose: a timeout is only one of several ways this
+            # request can fail (connection refused, DNS failure, TLS error,
+            # ...) and every one of them should still trigger the local
+            # fallback below, not crash the tool.
+            request_error = str(e)
 
-    if resp.status_code != 200:
-        return f"Request failed: HTTP {resp.status_code} - {resp.text[:300]}"
+    if resp is not None and resp.status_code == 200:
+        vector = resp.json()["data"][0]["embedding"]
+        model_used = EMBED_MODEL
+    else:
+        vector = await asyncio.to_thread(_local_embedding, text)
+        model_used = f"local:{_LOCAL_EMBED_MODEL_NAME}"
 
-    data = resp.json()
-    vector = data["data"][0]["embedding"]
+    if vector is None:
+        detail = f"HTTP {resp.status_code} - {resp.text[:300]}" if resp is not None else request_error
+        return (
+            f"NVIDIA embedding failed ({detail}) and no local fallback available "
+            "(run `uv sync --extra local-embeddings` to enable one)."
+        )
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     filename = f"embedding_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     filepath = OUTPUT_DIR / filename
-    filepath.write_text(json.dumps({"text": text, "model": EMBED_MODEL, "vector": vector}))
+    filepath.write_text(json.dumps({"text": text, "model": model_used, "vector": vector}))
 
-    return f"Embedding saved to {filepath} ({len(vector)} dimensions)"
+    return f"Embedding saved to {filepath} ({len(vector)} dimensions, model: {model_used})"
 
 
 @mcp.tool()
@@ -477,13 +597,13 @@ async def check_provider_health() -> str:
     Runs a minimal, single-token liveness probe against every unique NVIDIA
     model used across the other six tools' fallback chains (plus every
     free-tier provider - Groq/Mistral/Gemini/Cerebras - that has an API key
-    set, and generate_image's Pollinations.ai fallback tier), all
-    concurrently with a short timeout. Failures are caught and reported per
-    model instead of raising, so one dead model never hides the status of
-    the others. Models get silently rate-limited or retired on NVIDIA's
-    platform without notice - use this to see what's actually alive right
-    now instead of only discovering a dead model when a real request from
-    one of the other tools fails.
+    set, generate_image's Pollinations.ai tier, and describe_image's
+    vision-specific provider chain), all concurrently with a short timeout.
+    Failures are caught and reported per model instead of raising, so one
+    dead model never hides the status of the others. Models get silently
+    rate-limited or retired on NVIDIA's platform without notice - use this
+    to see what's actually alive right now instead of only discovering a
+    dead model when a real request from one of the other tools fails.
     """
     if not API_KEY:
         return "NVIDIA_API_KEY not set in .env - can't call the API."
@@ -492,17 +612,24 @@ async def check_provider_health() -> str:
     image_slugs = [m["slug"] for m in IMAGE_MODELS]
     sem = asyncio.Semaphore(HEALTH_PROBE_CONCURRENCY)
 
+    # EXTRA_PROVIDERS and VISION_PROVIDERS share one entry (Gemini's
+    # gemini-flash-latest is both the text and the vision fallback for that
+    # provider) - dedupe by model so it's probed once, not twice against the
+    # same free-tier rate limit for the same answer.
+    free_providers = list({p["model"]: p for p in (*EXTRA_PROVIDERS, *VISION_PROVIDERS)}.values())
+
     async with httpx2.AsyncClient() as client:
-        chat_results, image_results, embed_result, pollinations_result, extra_results = await asyncio.gather(
+        chat_results, image_results, embed_result, pollinations_result, free_provider_results = await asyncio.gather(
             asyncio.gather(*(_bounded(sem, _probe_nvidia_chat_model(client, m)) for m in chat_models)),
             asyncio.gather(*(_bounded(sem, _probe_nvidia_image_model(client, s)) for s in image_slugs)),
             _bounded(sem, _probe_nvidia_embed_model(client, EMBED_MODEL)),
             _bounded(sem, _probe_pollinations(client)),
-            asyncio.gather(*(_bounded(sem, _probe_extra_provider(p)) for p in EXTRA_PROVIDERS)),
+            asyncio.gather(*(_bounded(sem, _probe_extra_provider(p)) for p in free_providers)),
         )
 
     chat_status = dict(zip(chat_models, chat_results))
     image_status = dict(zip(image_slugs, image_results))
+    free_provider_status = dict(zip((p["model"] for p in free_providers), free_provider_results))
 
     def fmt_group(lines: list[str], title: str, models: list[str], status: dict) -> None:
         lines.append(f"{title}:")
@@ -524,8 +651,15 @@ async def check_provider_health() -> str:
     lines.append(f"  {'OK ' if embed_ok else 'FAIL'} {EMBED_MODEL} - {embed_detail}")
 
     lines.append("")
-    lines.append("Cross-provider fallback (translate_text / ask_llm only):")
-    for provider, (ok, detail) in zip(EXTRA_PROVIDERS, extra_results):
+    lines.append("Cross-provider fallback (translate_text / ask_llm / check_content_safety):")
+    for provider in EXTRA_PROVIDERS:
+        ok, detail = free_provider_status[provider["model"]]
+        lines.append(f"  {'OK ' if ok else 'FAIL'} {provider['model']} ({provider['env']}) - {detail}")
+
+    lines.append("")
+    lines.append("Cross-provider fallback (describe_image only):")
+    for provider in VISION_PROVIDERS:
+        ok, detail = free_provider_status[provider["model"]]
         lines.append(f"  {'OK ' if ok else 'FAIL'} {provider['model']} ({provider['env']}) - {detail}")
 
     return "\n".join(lines)

@@ -32,17 +32,17 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 
 ![Tool grid](assets/tools-grid.svg)
 
-Seven tools. Six are backed by their own model chain; the seventh checks the health of every model the other six actually use. The two marked **✓** below also cross into other free-tier providers if NVIDIA runs dry — see [The fallback chain](#-the-fallback-chain) for exactly how that decision is made.
+Seven tools. Six are backed by their own model chain; the seventh checks the health of every model the other six actually use. Every generation tool now has at least one fallback beyond NVIDIA — see [The fallback chain](#-the-fallback-chain) for exactly how each one is shaped.
 
-| Tool | What it does | NVIDIA model chain (in order) | Cross-provider fallback |
+| Tool | What it does | NVIDIA model chain (in order) | Fallback beyond NVIDIA |
 |---|---|---|---|
-| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | ✓ (free, keyless Pollinations.ai as a last resort) |
-| 🌐 `translate_text` | Translate text into any target language | `riva-translate-4b-instruct-v2` → `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | ✓ |
-| 💬 `ask_llm` | Ask a non-Anthropic model for a second opinion | `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | ✓ |
-| 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | — |
-| 🛡️ `check_content_safety` | Safe/unsafe verdict on a piece of text | `nemotron-3.5-content-safety` | — |
-| 🔗 `create_embedding` | Semantic embedding vector, saved to `output/` | `nemotron-3-embed-1b` | — |
-| 🩺 `check_provider_health` | Liveness probe for every model above, without generating real content | every model used by the other six, concurrently | ✓ (checks configured extras too) |
+| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | Pollinations.ai (free, keyless) |
+| 🌐 `translate_text` | Translate text into any target language | `riva-translate-4b-instruct-v2` → `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured |
+| 💬 `ask_llm` | Ask a non-Anthropic model for a second opinion | `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured |
+| 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | Groq/Mistral/Gemini vision models, whichever configured |
+| 🛡️ `check_content_safety` | Safe/unsafe verdict on a piece of text | `nemotron-3.5-content-safety` | Best-effort classification prompt via Groq/Mistral/Gemini/Cerebras |
+| 🔗 `create_embedding` | Semantic embedding vector, saved to `output/` | `nemotron-3-embed-1b` | Local sentence-transformers (`local-embeddings` extra, opt-in) |
+| 🩺 `check_provider_health` | Liveness probe for every model above, without generating real content | every model used by the other six, concurrently | checks every fallback tier too |
 
 Every model in these chains was confirmed working with a real request before being wired in — see the comments at the top of `nvidia_image.py` for the verification notes (including two models that were removed after NVIDIA retired them outright, HTTP 410). `check_provider_health` exists precisely because that kind of silent retirement keeps happening — run it to see what's actually alive right now instead of finding out mid-request.
 
