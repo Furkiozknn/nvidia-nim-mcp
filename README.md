@@ -36,7 +36,7 @@ Seven tools. Six are backed by their own model chain; the seventh checks the hea
 
 | Tool | What it does | NVIDIA model chain (in order) | Cross-provider fallback |
 |---|---|---|---|
-| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | — |
+| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | ✓ (free, keyless Pollinations.ai as a last resort) |
 | 🌐 `translate_text` | Translate text into any target language | `riva-translate-4b-instruct-v2` → `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | ✓ |
 | 💬 `ask_llm` | Ask a non-Anthropic model for a second opinion | `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | ✓ |
 | 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | — |
@@ -55,7 +55,7 @@ This is the one feature worth understanding properly, because it's not the same 
 **In short:**
 
 1. **All six generation tools** try their NVIDIA models first, in the order shown in the table above. The first one that answers wins. (`check_provider_health` is different — it probes every model instead of stopping at the first success; see its row above.)
-2. **Only `translate_text` and `ask_llm`** keep going if every NVIDIA model in their chain fails. They fall through to whichever of these you've configured, in this fixed order:
+2. **`translate_text` and `ask_llm`** keep going if every NVIDIA model in their chain fails. They fall through to whichever of these you've configured, in this fixed order:
 
    | Order | Provider | Model | Gate |
    |---|---|---|---|
@@ -65,9 +65,10 @@ This is the one feature worth understanding properly, because it's not the same 
    | 4 | Cerebras | `cerebras/gpt-oss-120b` | `CEREBRAS_API_KEY` |
 
    Any provider whose key is missing from `.env` is skipped silently — no error, no code change needed. Drop a key in and it joins the chain on the next call.
-3. **`generate_image`, `describe_image`, `check_content_safety`, and `create_embedding` stay NVIDIA-only.** If every model in their chain fails, you get back a clear error string listing what was tried — nothing throws, and nothing silently falls through to another provider.
+3. **`generate_image`** also has one fallback tier, but a different one: if both `flux.1-dev` and `flux.2-klein-4b` fail, it drops to [Pollinations.ai](https://pollinations.ai/) — free, keyless, no `.env` entry required. It's a lower-quality tier than either NVIDIA model, so it's deliberately last-resort rather than tried first for speed.
+4. **`describe_image`, `check_content_safety`, and `create_embedding` stay NVIDIA-only.** If every model in their chain fails, you get back a clear error string listing what was tried — nothing throws, and nothing silently falls through to another provider.
 
-Why the split? Image generation, vision, safety, and embeddings each depend on NVIDIA-specific endpoints or model shapes that don't have a drop-in equivalent elsewhere yet. Chat-style text generation does — so that's where the wider safety net lives today. Nothing stops the other tools from growing one later.
+Why the split? Image generation has one free, keyless fallback (Pollinations) worth using since it costs nothing to try; vision, safety, and embeddings depend on NVIDIA-specific model shapes with no equivalent free tier elsewhere yet; chat-style text generation has the widest safety net since more free-tier LLM providers exist. Nothing stops the other tools from growing one later.
 
 ## ⚙️ Setup
 

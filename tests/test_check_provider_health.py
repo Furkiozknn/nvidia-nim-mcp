@@ -158,6 +158,38 @@ async def test_check_provider_health_isolates_per_model_failures(nvidia_key, fak
 
 
 @pytest.mark.asyncio
+async def test_check_provider_health_includes_pollinations_fallback_probe(nvidia_key, fake_async_client, monkeypatch):
+    for provider in nvidia_image.EXTRA_PROVIDERS:
+        monkeypatch.delenv(provider["env"], raising=False)
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(200),
+        get_side_effect=lambda *a, **kw: FakeResponse(200),
+    )
+
+    report = await nvidia_image.check_provider_health()
+
+    assert "OK  pollinations (fallback) - ok" in report or "OK pollinations (fallback) - ok" in report
+
+
+@pytest.mark.asyncio
+async def test_check_provider_health_isolates_pollinations_failure_from_nvidia_models(
+    nvidia_key, fake_async_client, monkeypatch
+):
+    for provider in nvidia_image.EXTRA_PROVIDERS:
+        monkeypatch.delenv(provider["env"], raising=False)
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(200),
+        get_side_effect=lambda *a, **kw: FakeResponse(503),
+    )
+
+    report = await nvidia_image.check_provider_health()
+
+    assert "FAIL pollinations (fallback) - HTTP 503" in report
+    # A dead fallback tier doesn't blank out the (still-healthy) NVIDIA image models.
+    assert "OK  black-forest-labs/flux.1-dev" in report or "OK black-forest-labs/flux.1-dev" in report
+
+
+@pytest.mark.asyncio
 async def test_check_provider_health_does_not_raise_on_total_network_failure(
     nvidia_key, fake_async_client, monkeypatch
 ):

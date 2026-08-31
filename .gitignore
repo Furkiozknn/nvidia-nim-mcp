@@ -1,6 +1,10 @@
 .env
 .venv/
+.venv-test/
 __pycache__/
+*.egg-info/
+.pytest_cache/
 *.mp4
 *.png
 *.jpg
+output/*.json

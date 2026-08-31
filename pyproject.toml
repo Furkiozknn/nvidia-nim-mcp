@@ -17,6 +17,19 @@ dev = [
     "pytest-asyncio>=0.24.0",
 ]
 
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# This project is a single-file MCP server, not a Python package - without
+# this, setuptools' flat-layout auto-discovery breaks the moment a second
+# top-level directory exists (assets/, or output/ once generate_image or
+# create_embedding has run once locally), since it can no longer tell which
+# directory is "the package". Declaring the one real module explicitly skips
+# that discovery entirely.
+py-modules = ["nvidia_image"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]

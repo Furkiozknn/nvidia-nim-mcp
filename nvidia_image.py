@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +40,15 @@ IMAGE_MODELS = [
     {"slug": "black-forest-labs/flux.1-dev", "cfg_scale": 3.5, "steps": 25},
     {"slug": "black-forest-labs/flux.2-klein-4b", "cfg_scale": 1, "steps": 4},
 ]
+
+# Last-resort image fallback if every NVIDIA model above fails or is
+# rate-limited: Pollinations.ai, free and keyless (no auth, no quota on our
+# side). Same backend and technique already validated in
+# mini-creative-toolkit's own generate_image_free tool - reused here as a
+# fallback tier rather than duplicated as a second free-standing tool, since
+# this MCP server's generate_image already owns the "try several backends"
+# contract.
+POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 
 TRANSLATE_MODELS = [
     "nvidia/riva-translate-4b-instruct-v2",
@@ -203,6 +213,34 @@ async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> t
     return True, "ok"
 
 
+async def _generate_image_pollinations(client: httpx2.AsyncClient, prompt: str, seed: int, width: int, height: int) -> bytes:
+    """Generate via the free Pollinations.ai backend - only called from
+    generate_image after every NVIDIA model has already failed."""
+    encoded = urllib.parse.quote(prompt)
+    params = {"width": width, "height": height, "nologo": "true", "seed": seed}
+    resp = await client.get(f"{POLLINATIONS_BASE}/{encoded}", params=params, timeout=60.0, follow_redirects=True)
+    resp.raise_for_status()
+    return resp.content
+
+
+async def _probe_pollinations(client: httpx2.AsyncClient) -> tuple[bool, str]:
+    """Cheap liveness probe for the Pollinations.ai fallback: a tiny image request."""
+    try:
+        resp = await client.get(
+            f"{POLLINATIONS_BASE}/hi",
+            params={"width": 8, "height": 8, "nologo": "true"},
+            timeout=HEALTH_PROBE_TIMEOUT,
+            follow_redirects=True,
+        )
+    except httpx2.TimeoutException:
+        return False, "timed out"
+    except Exception as e:
+        return False, f"error: {e}"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}"
+    return True, "ok"
+
+
 async def _probe_extra_provider(provider: dict) -> tuple[bool, str]:
     """Cheap liveness probe for one cross-provider fallback model. Skipped
     (not an error) if its API key isn't set in .env."""
@@ -226,8 +264,10 @@ async def _probe_extra_provider(provider: dict) -> tuple[bool, str]:
 async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: int = 1024) -> str:
     """Generate an image from a text prompt using NVIDIA NIM image models.
 
-    Tries multiple models in order (flux.1-dev, then flux.2-klein-4b) so a
-    single model being rate-limited or slow doesn't block generation.
+    Tries multiple models in order (flux.1-dev, then flux.2-klein-4b), then
+    falls back to the free Pollinations.ai backend if both NVIDIA models
+    fail - a provider outage no longer blocks generation entirely, it just
+    silently drops the caller to a lower-quality free tier.
 
     Args:
         prompt: Description of the image to generate.
@@ -268,6 +308,17 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
             filepath = OUTPUT_DIR / filename
             filepath.write_bytes(base64.b64decode(img_b64))
             return f"Image saved to {filepath} (model: {model['slug']})"
+
+        try:
+            image_bytes = await _generate_image_pollinations(client, prompt, seed, width, height)
+        except Exception as e:
+            errors.append(f"pollinations (fallback): {e}")
+        else:
+            OUTPUT_DIR.mkdir(exist_ok=True)
+            filename = f"pollinations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            filepath = OUTPUT_DIR / filename
+            filepath.write_bytes(image_bytes)
+            return f"Image saved to {filepath} (model: pollinations, fallback after NVIDIA models failed)"
 
     return "All image models failed:\n" + "\n".join(errors)
 
@@ -426,12 +477,13 @@ async def check_provider_health() -> str:
     Runs a minimal, single-token liveness probe against every unique NVIDIA
     model used across the other six tools' fallback chains (plus every
     free-tier provider - Groq/Mistral/Gemini/Cerebras - that has an API key
-    set), all concurrently with a short timeout. Failures are caught and
-    reported per model instead of raising, so one dead model never hides the
-    status of the others. Models get silently rate-limited or retired on
-    NVIDIA's platform without notice - use this to see what's actually alive
-    right now instead of only discovering a dead model when a real request
-    from one of the other tools fails.
+    set, and generate_image's Pollinations.ai fallback tier), all
+    concurrently with a short timeout. Failures are caught and reported per
+    model instead of raising, so one dead model never hides the status of
+    the others. Models get silently rate-limited or retired on NVIDIA's
+    platform without notice - use this to see what's actually alive right
+    now instead of only discovering a dead model when a real request from
+    one of the other tools fails.
     """
     if not API_KEY:
         return "NVIDIA_API_KEY not set in .env - can't call the API."
@@ -441,10 +493,11 @@ async def check_provider_health() -> str:
     sem = asyncio.Semaphore(HEALTH_PROBE_CONCURRENCY)
 
     async with httpx2.AsyncClient() as client:
-        chat_results, image_results, embed_result, extra_results = await asyncio.gather(
+        chat_results, image_results, embed_result, pollinations_result, extra_results = await asyncio.gather(
             asyncio.gather(*(_bounded(sem, _probe_nvidia_chat_model(client, m)) for m in chat_models)),
             asyncio.gather(*(_bounded(sem, _probe_nvidia_image_model(client, s)) for s in image_slugs)),
             _bounded(sem, _probe_nvidia_embed_model(client, EMBED_MODEL)),
+            _bounded(sem, _probe_pollinations(client)),
             asyncio.gather(*(_bounded(sem, _probe_extra_provider(p)) for p in EXTRA_PROVIDERS)),
         )
 
@@ -459,6 +512,8 @@ async def check_provider_health() -> str:
 
     lines: list[str] = ["NVIDIA NIM provider health check:", ""]
     fmt_group(lines, "generate_image", image_slugs, image_status)
+    poll_ok, poll_detail = pollinations_result
+    lines.append(f"  {'OK ' if poll_ok else 'FAIL'} pollinations (fallback) - {poll_detail}")
     fmt_group(lines, "translate_text", TRANSLATE_MODELS, chat_status)
     fmt_group(lines, "ask_llm", LLM_MODELS, chat_status)
     fmt_group(lines, "describe_image", VISION_MODELS, chat_status)
