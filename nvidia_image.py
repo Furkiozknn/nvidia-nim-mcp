@@ -145,6 +145,19 @@ async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], mes
 # quick "is it alive" check, not a real request, so failing fast is correct.
 HEALTH_PROBE_TIMEOUT = 8.0
 
+# check_provider_health fires every probe concurrently via asyncio.gather with
+# no cap of its own - fine today with ~12 total models/providers, but nothing
+# stops that from becoming a self-inflicted burst against NVIDIA's (and every
+# extra provider's) rate limits if the model lists grow. Bound how many probes
+# are ever in flight at once, independent of how many models exist.
+HEALTH_PROBE_CONCURRENCY = 6
+
+
+async def _bounded(sem: asyncio.Semaphore, coro):
+    """Run one probe coroutine under a concurrency cap."""
+    async with sem:
+        return await coro
+
 
 async def _probe_nvidia_chat_model(client: httpx2.AsyncClient, model: str) -> tuple[bool, str]:
     """Cheap liveness probe for one NVIDIA chat-completions model: a
@@ -425,13 +438,14 @@ async def check_provider_health() -> str:
 
     chat_models = sorted(set(TRANSLATE_MODELS) | set(LLM_MODELS) | set(VISION_MODELS) | {SAFETY_MODEL})
     image_slugs = [m["slug"] for m in IMAGE_MODELS]
+    sem = asyncio.Semaphore(HEALTH_PROBE_CONCURRENCY)
 
     async with httpx2.AsyncClient() as client:
         chat_results, image_results, embed_result, extra_results = await asyncio.gather(
-            asyncio.gather(*(_probe_nvidia_chat_model(client, m) for m in chat_models)),
-            asyncio.gather(*(_probe_nvidia_image_model(client, s) for s in image_slugs)),
-            _probe_nvidia_embed_model(client, EMBED_MODEL),
-            asyncio.gather(*(_probe_extra_provider(p) for p in EXTRA_PROVIDERS)),
+            asyncio.gather(*(_bounded(sem, _probe_nvidia_chat_model(client, m)) for m in chat_models)),
+            asyncio.gather(*(_bounded(sem, _probe_nvidia_image_model(client, s)) for s in image_slugs)),
+            _bounded(sem, _probe_nvidia_embed_model(client, EMBED_MODEL)),
+            asyncio.gather(*(_bounded(sem, _probe_extra_provider(p)) for p in EXTRA_PROVIDERS)),
         )
 
     chat_status = dict(zip(chat_models, chat_results))
