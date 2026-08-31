@@ -136,7 +136,7 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 ## 🗂 Project layout
 
 ```
-cosmos-video/
+nvidia-nim-mcp/
 ├── nvidia_image.py     # the MCP server — all 6 tools live here
 ├── pyproject.toml      # uv project + dependencies (httpx, litellm, mcp)
 ├── .env.example        # copy to .env and fill in your keys
