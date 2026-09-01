@@ -7,6 +7,14 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ends of the range declared in pyproject.toml's requires-python.
+        # Testing the floor is the point: it was never exercised before, which
+        # is how an unjustified ">=3.14" pin survived unnoticed.
+        python-version: ["3.11", "3.14"]
+    name: test (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v4
 
@@ -16,7 +24,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --python ${{ matrix.python-version }}
 
       - name: Run tests
-        run: uv run pytest
+        run: uv run --python ${{ matrix.python-version }} pytest

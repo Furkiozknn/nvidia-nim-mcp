@@ -3,12 +3,19 @@ name = "nvidia-nim"
 version = "0.1.0"
 description = "NVIDIA NIM MCP server: image gen, translation, LLM, vision, content safety, embeddings"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28.1",
+    # httpx2 (pydantic's next-generation client) is what this server actually
+    # imports. Plain httpx was declared here but never imported anywhere in
+    # nvidia_image.py, so it is no longer listed as a direct dependency.
     "httpx2>=2.12.0",
     "litellm>=1.97.0",
     "mcp[cli]>=2.0.0",
+    # Imported directly by nvidia_image.py (`from dotenv import load_dotenv`).
+    # It previously resolved only because litellm and mcp happen to pull it in
+    # transitively - declaring it keeps this server working if either of them
+    # ever drops that transitive edge.
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
