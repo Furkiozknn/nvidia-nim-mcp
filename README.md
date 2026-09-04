@@ -3,7 +3,7 @@
 ![nvidia-nim-mcp](assets/banner.svg)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-76b900?style=flat-square)](LICENSE)
-[![Python 3.14+](https://img.shields.io/badge/python-3.14%2B-76b900?style=flat-square)](pyproject.toml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-76b900?style=flat-square)](pyproject.toml)
 [![MCP Server](https://img.shields.io/badge/MCP-server-76b900?style=flat-square)](https://modelcontextprotocol.io)
 [![Cost](https://img.shields.io/badge/cost-%240-76b900?style=flat-square)](#-setup)
 
