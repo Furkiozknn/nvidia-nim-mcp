@@ -10,7 +10,7 @@ dependencies = [
     # nvidia_image.py, so it is no longer listed as a direct dependency.
     "httpx2>=2.12.0",
     "litellm>=1.97.0",
-    "mcp[cli]>=2.0.0",
+    "mcp[cli]>=2.1,<3",
     # Imported directly by nvidia_image.py (`from dotenv import load_dotenv`).
     # It previously resolved only because litellm and mcp happen to pull it in
     # transitively - declaring it keeps this server working if either of them

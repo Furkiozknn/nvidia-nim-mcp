@@ -51,6 +51,26 @@ IMAGE_MODELS = [
 # contract.
 POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
 
+# Ceiling for one Pollinations image download. The response is streamed and
+# counted, not trusted from Content-Length; without this a misbehaving or
+# compromised endpoint could make the fallback buffer arbitrarily many bytes.
+POLLINATIONS_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+# describe_image reads a caller-supplied local file and uploads its bytes
+# (base64, inside the prompt) to NVIDIA or a fallback provider - a third
+# party either way. The allowlist and cap make a wrong or malicious path
+# ("describe /etc/shadow", a multi-GB file) fail fast and locally instead of
+# exfiltrating whatever happens to be at the path. Same reasoning and shape
+# as voice-io-mcp's speech_to_text limits.
+DESCRIBE_IMAGE_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+DESCRIBE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+# Passed to every litellm chain call. litellm's own default is 600 seconds -
+# a wedged provider would otherwise hold a tool call for ten minutes, far
+# past any MCP client's patience. Two minutes is generous for chat-sized
+# completions while still guaranteeing the tool returns.
+LLM_TIMEOUT = 120.0
+
 TRANSLATE_MODELS = [
     "nvidia/riva-translate-4b-instruct-v2",
     "nvidia/llama-3.3-nemotron-super-49b-v1.5",
@@ -120,6 +140,7 @@ async def _run_chat_chain(chain: list[dict], messages: list[dict], max_tokens: i
             messages=messages,
             max_tokens=max_tokens,
             fallbacks=fallbacks or None,
+            timeout=LLM_TIMEOUT,
             **primary,
         )
     except Exception as e:
@@ -285,14 +306,56 @@ async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> t
     return True, "ok"
 
 
+def _sniff_image_format(body: bytes) -> str | None:
+    """The format the magic bytes claim, or None for not-an-image. A cheap
+    stand-in for a full decode (this server deliberately has no image
+    library): it catches the real failure mode - an HTML error page or
+    empty body served with a 200 - though not a truncated transfer."""
+    if body.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "webp"
+    if body.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return None
+
+
 async def _generate_image_pollinations(client: httpx2.AsyncClient, prompt: str, seed: int, width: int, height: int) -> bytes:
     """Generate via the free Pollinations.ai backend - only called from
-    generate_image after every NVIDIA model has already failed."""
+    generate_image after every NVIDIA model has already failed.
+
+    The body is streamed with a byte ceiling and verified to actually be an
+    image (Content-Type and magic bytes) before it is returned - a free
+    endpoint under load happily serves HTML error pages with a 200, and
+    those must not be written to disk as a .jpg."""
     encoded = urllib.parse.quote(prompt)
     params = {"width": width, "height": height, "nologo": "true", "seed": seed}
-    resp = await client.get(f"{POLLINATIONS_BASE}/{encoded}", params=params, timeout=60.0, follow_redirects=True)
-    resp.raise_for_status()
-    return resp.content
+    async with client.stream(
+        "GET", f"{POLLINATIONS_BASE}/{encoded}", params=params, timeout=60.0, follow_redirects=True
+    ) as resp:
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+        if not content_type.startswith("image/"):
+            raise RuntimeError(
+                f"pollinations returned Content-Type {content_type or '(none)'!r}, not an image "
+                "(usually an error page served with a success status)"
+            )
+        buffer = bytearray()
+        async for chunk in resp.aiter_bytes():
+            buffer.extend(chunk)
+            if len(buffer) > POLLINATIONS_MAX_DOWNLOAD_BYTES:
+                raise RuntimeError(
+                    f"pollinations response exceeded the {POLLINATIONS_MAX_DOWNLOAD_BYTES} byte "
+                    "download limit and was aborted"
+                )
+    body = bytes(buffer)
+    if _sniff_image_format(body) is None:
+        raise RuntimeError(
+            f"pollinations returned {len(body)} bytes that are not a recognizable image"
+        )
+    return body
 
 
 async def _probe_pollinations(client: httpx2.AsyncClient) -> tuple[bool, str]:
@@ -465,6 +528,19 @@ async def describe_image(image_path: str, question: str = "Describe this image i
         return f"File not found: {image_path}"
 
     ext = path.suffix.lstrip(".").lower()
+    if ext not in DESCRIBE_IMAGE_ALLOWED_EXTENSIONS:
+        return (
+            f"Not an image file this tool will upload: {image_path} "
+            f"(allowed extensions: {', '.join(sorted(DESCRIBE_IMAGE_ALLOWED_EXTENSIONS))}). "
+            "The file's bytes would be sent to a third-party API, so only "
+            "recognized image types are accepted."
+        )
+    size = path.stat().st_size
+    if size > DESCRIBE_IMAGE_MAX_BYTES:
+        return (
+            f"File too large to upload: {image_path} is {size} bytes; the limit is "
+            f"{DESCRIBE_IMAGE_MAX_BYTES} (base64 inflates it by a third on top)."
+        )
     mime = "jpeg" if ext in ("jpg", "jpeg") else ext
     img_b64 = base64.b64encode(path.read_bytes()).decode()
 
