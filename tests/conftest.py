@@ -58,14 +58,20 @@ def no_nvidia_key(monkeypatch):
 class FakeResponse:
     """Minimal stand-in for an httpx2.Response."""
 
-    def __init__(self, status_code=200, json_data=None, text="", content=b""):
+    def __init__(self, status_code=200, json_data=None, text="", content=b"", headers=None):
         self.status_code = status_code
         self._json_data = json_data if json_data is not None else {}
         self.text = text
         self.content = content
+        # The Pollinations download verifies Content-Type; default to a
+        # valid image type so tests not about that check don't care.
+        self.headers = headers if headers is not None else {"content-type": "image/jpeg"}
 
     def json(self):
         return self._json_data
+
+    async def aiter_bytes(self):
+        yield self.content
 
     def raise_for_status(self):
         # Real httpx raises httpx.HTTPStatusError; production code only ever
@@ -88,8 +94,23 @@ class FakeAsyncClient:
         self.get = AsyncMock(
             side_effect=get_side_effect
             if get_side_effect is not None
-            else (lambda *a, **kw: FakeResponse(200, content=b"fake-image-bytes"))
+            else (lambda *a, **kw: FakeResponse(200, content=b"\xff\xd8\xfffake-image-bytes"))
         )
+
+    def stream(self, method, url, **kwargs):
+        """`async with client.stream(...)` support. Routes through the same
+        `get` AsyncMock so `get_side_effect` and `client.get.await_count`
+        keep meaning "the Pollinations download" in existing tests."""
+        fake = self
+
+        class _StreamContext:
+            async def __aenter__(self):
+                return await fake.get(url, **kwargs)
+
+            async def __aexit__(self, *exc_info):
+                return False
+
+        return _StreamContext()
 
     async def __aenter__(self):
         return self

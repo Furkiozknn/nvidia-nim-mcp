@@ -75,3 +75,42 @@ async def test_describe_image_reports_failure_when_nvidia_and_fallback_both_fail
     result = await nvidia_image.describe_image(image_path=sample_image)
 
     assert result == "All vision models failed or timed out."
+
+
+# --- upload guards (audit F5): the file's bytes go to a third party ---
+
+
+@pytest.mark.asyncio
+async def test_describe_image_refuses_non_image_extensions_without_uploading(
+    nvidia_key, tmp_path, monkeypatch
+):
+    secret = tmp_path / "credentials.txt"
+    secret.write_text("hunter2")
+
+    async def _must_not_be_called(*a, **kw):
+        raise AssertionError("no bytes may leave the machine for a refused file")
+
+    monkeypatch.setattr(nvidia_image.litellm, "acompletion", _must_not_be_called)
+
+    result = await nvidia_image.describe_image(str(secret))
+
+    assert "Not an image file" in result
+    assert "allowed extensions" in result
+
+
+@pytest.mark.asyncio
+async def test_describe_image_refuses_oversized_files_without_uploading(
+    nvidia_key, tmp_path, monkeypatch
+):
+    big = tmp_path / "huge.png"
+    big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 128)
+    monkeypatch.setattr(nvidia_image, "DESCRIBE_IMAGE_MAX_BYTES", 64)
+
+    async def _must_not_be_called(*a, **kw):
+        raise AssertionError("no bytes may leave the machine for a refused file")
+
+    monkeypatch.setattr(nvidia_image.litellm, "acompletion", _must_not_be_called)
+
+    result = await nvidia_image.describe_image(str(big))
+
+    assert "too large" in result
