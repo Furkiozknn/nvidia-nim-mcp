@@ -35,3 +35,35 @@ jobs:
 
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest
+
+  # `yayinla.yml` yalniz `v*` etiketinde kosuyor, yani paketleme bozulursa
+  # bunu ancak yayinlamaya calistigin an ogrenirsin. Kardes depo mcp-vet'te
+  # tam olarak bu oldu: 244 test yesilken `uv build` calismiyordu, cunku
+  # hicbir sey paketlemeyi denemiyordu. Bu is onu her push'a tasiyor.
+  paket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Paket derleniyor mu
+        run: uv build
+
+      - name: Uretilen paket gecerli mi
+        run: uvx twine check dist/*
+
+      # Derlemenin basarili olmasi paketin icinde dogru dosyalarin oldugunu
+      # kanitlamaz: eksik bir modul ya da yanlis bir giris noktasi ancak
+      # kurulunca ortaya cikar.
+      - name: Tekerlek kuruluyor ve giris noktasi yerinde
+        run: |
+          set -e
+          uv venv /tmp/deneme
+          VIRTUAL_ENV=/tmp/deneme uv pip install dist/*.whl
+          test -x /tmp/deneme/bin/nvidia-nim-mcp || { echo "konsol komutu uretilmedi: nvidia-nim-mcp"; exit 1; }
+          # Sunucu stdio'da sonsuza kadar bloke oldugu icin CALISTIRILMIYOR;
+          # hedefin var ve cagrilabilir oldugu dogrulaniyor.
+          VIRTUAL_ENV=/tmp/deneme /tmp/deneme/bin/python -c "import nvidia_image as m; assert callable(m.main), 'main cagrilabilir degil'"
+          echo "nvidia-nim-mcp kuruldu, giris noktasi cagrilabilir"
