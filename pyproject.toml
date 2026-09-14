@@ -1,9 +1,34 @@
 [project]
-name = "nvidia-nim"
+name = "nvidia-nim-mcp"
 version = "0.1.0"
 description = "NVIDIA NIM MCP server: image gen, translation, LLM, vision, content safety, embeddings"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Furki Ozkan" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "nvidia",
+    "nim",
+    "llm",
+    "image-generation",
+    "translation",
+    "claude",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     # httpx2 (pydantic's next-generation client) is what this server actually
     # imports. Plain httpx was declared here but never imported anywhere in
