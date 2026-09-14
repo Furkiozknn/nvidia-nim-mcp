@@ -62,6 +62,9 @@ dev = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[project.scripts]
+nvidia-nim-mcp = "nvidia_image:main"
+
 [tool.setuptools]
 # This project is a single-file MCP server, not a Python package - without
 # this, setuptools' flat-layout auto-discovery breaks the moment a second

@@ -741,5 +741,16 @@ async def check_provider_health() -> str:
     return "\n".join(lines)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Konsol giris noktasi.
+
+    Ayri bir fonksiyon, cunku `[project.scripts]` bir modul degil bir
+    CAGRILABILIR istiyor. Bu olmadan paket kurulabiliyor ama
+    calistirilamiyor: kullanicinin depoyu klonlayip dosyaya yol
+    gostermesi gerekiyor, ki bu da yayinlamanin amacini bosa cikariyor.
+    """
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
