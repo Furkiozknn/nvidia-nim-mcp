@@ -19,18 +19,61 @@ logger = logging.getLogger(__name__)
 
 mcp = MCPServer("nvidia-nim")
 
-API_KEY = os.environ.get("NVIDIA_API_KEY")
+NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
 GENAI_BASE = "https://ai.api.nvidia.com/v1/genai"
 CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 EMBED_URL = "https://integrate.api.nvidia.com/v1/embeddings"
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 
-HEADERS = {
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-}
+
+def _api_key() -> str | None:
+    """The NVIDIA key as it is *right now*, or None.
+
+    Read per request rather than snapshotted at import: a module-level
+    snapshot ignores key rotation entirely, and a `.env` written after the
+    server process started never takes effect. Empty string normalizes to
+    None - an emptied-out .env value means "no key", not "the empty key".
+    """
+    return os.environ.get(NVIDIA_API_KEY_ENV) or None
+
+
+def _headers() -> dict[str, str]:
+    """Auth headers for NVIDIA's endpoints, built per request from the
+    current environment. A module-level HEADERS dict built at import time
+    produced a literal `Bearer None` when no key was set - a request
+    guaranteed to 401 confusingly instead of the NVIDIA tier being skipped.
+    Only called from paths already gated on _api_key() being set.
+    """
+    return {
+        "Authorization": f"Bearer {_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _stamp() -> str:
+    """Microsecond-precision timestamp for output filenames. Plain
+    second-precision let two calls landing in the same wall-clock second
+    silently overwrite each other's file - the same bug, and the same fix,
+    as voice-io-mcp's _stamp()."""
+    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+def _redact(text: str, secret: str | None) -> str:
+    """Scrub a known secret out of an error/log string before it's returned
+    to the caller. Ported from voice-io-mcp. Defense-in-depth: a provider's
+    error body is attacker-influenced text this server hands straight back,
+    and a 401 echoing the offending Authorization header is not ruled out."""
+    if not secret:
+        return text
+    return text.replace(secret, "***")
+
+
+def _read_image_b64(path: Path) -> str:
+    """Read an image file and base64-encode it. Blocking disk I/O - always
+    called through asyncio.to_thread, never inline in an async def."""
+    return base64.b64encode(path.read_bytes()).decode()
 
 # Every model below was confirmed working with a real request (2026-08-22)
 # before being wired in - see new-mcp-server skill for why that matters.
@@ -114,12 +157,19 @@ EXTRA_PROVIDERS = [
 
 
 def _build_chat_chain(nvidia_models: list[str]) -> list[dict]:
-    """NVIDIA models first (need the custom api_base), then any extra free-tier
-    provider whose key is actually present in the environment right now."""
+    """NVIDIA models first (they need the custom api_base) - but only when
+    NVIDIA_API_KEY is actually set - then any extra free-tier provider whose
+    key is present in the environment right now.
+
+    With no NVIDIA key the chain starts at the free tier instead of being
+    empty. That is the entire point of the documented fallback chain, and a
+    blanket "NVIDIA_API_KEY not set" guard in front of every tool made it
+    unreachable for anyone holding only a GROQ/MISTRAL/GEMINI key."""
+    nvidia_key = _api_key()
     chain = [
-        {"model": f"openai/{m}", "api_base": CHAT_URL.rsplit("/chat/completions", 1)[0], "api_key": API_KEY}
+        {"model": f"openai/{m}", "api_base": CHAT_URL.rsplit("/chat/completions", 1)[0], "api_key": nvidia_key}
         for m in nvidia_models
-    ]
+    ] if nvidia_key else []
     for provider in EXTRA_PROVIDERS:
         key = os.environ.get(provider["env"])
         if key:
@@ -227,11 +277,18 @@ async def _chat_via_provider_chain(providers: list[dict], messages: list[dict], 
 
 
 async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
-    """Try each model in order, return (content, model_used) from the first success."""
+    """Try each model in order, return (content, model_used) from the first
+    success. These are NVIDIA-only endpoints, so with no NVIDIA_API_KEY there
+    is nothing here to try: return None immediately and let the caller move
+    on to its cross-provider fallback, rather than firing a request that can
+    only 401."""
+    if not _api_key():
+        return None
+    headers = _headers()
     for model in models:
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         try:
-            resp = await client.post(CHAT_URL, headers=HEADERS, json=body, timeout=18.0)
+            resp = await client.post(CHAT_URL, headers=headers, json=body, timeout=18.0)
         except httpx2.TimeoutException:
             continue
         if resp.status_code != 200:
@@ -267,11 +324,11 @@ async def _probe_nvidia_chat_model(client: httpx2.AsyncClient, model: str) -> tu
     single-token reply, not a real generation."""
     body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1}
     try:
-        resp = await client.post(CHAT_URL, headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+        resp = await client.post(CHAT_URL, headers=_headers(), json=body, timeout=HEALTH_PROBE_TIMEOUT)
     except httpx2.TimeoutException:
         return False, "timed out"
     except Exception as e:
-        return False, f"error: {e}"
+        return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
         return False, f"HTTP {resp.status_code}"
     return True, "ok"
@@ -282,11 +339,11 @@ async def _probe_nvidia_image_model(client: httpx2.AsyncClient, slug: str) -> tu
     tiny-resolution generation instead of a full-quality image."""
     body = {"prompt": "hi", "steps": 1, "cfg_scale": 1, "seed": 0, "width": 64, "height": 64}
     try:
-        resp = await client.post(f"{GENAI_BASE}/{slug}", headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+        resp = await client.post(f"{GENAI_BASE}/{slug}", headers=_headers(), json=body, timeout=HEALTH_PROBE_TIMEOUT)
     except httpx2.TimeoutException:
         return False, "timed out"
     except Exception as e:
-        return False, f"error: {e}"
+        return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
         return False, f"HTTP {resp.status_code}"
     return True, "ok"
@@ -296,11 +353,11 @@ async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> t
     """Cheap liveness probe for the NVIDIA embedding model: a one-word input."""
     body = {"input": ["hi"], "model": model, "input_type": "query"}
     try:
-        resp = await client.post(EMBED_URL, headers=HEADERS, json=body, timeout=HEALTH_PROBE_TIMEOUT)
+        resp = await client.post(EMBED_URL, headers=_headers(), json=body, timeout=HEALTH_PROBE_TIMEOUT)
     except httpx2.TimeoutException:
         return False, "timed out"
     except Exception as e:
-        return False, f"error: {e}"
+        return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
         return False, f"HTTP {resp.status_code}"
     return True, "ok"
@@ -391,8 +448,33 @@ async def _probe_extra_provider(provider: dict) -> tuple[bool, str]:
             timeout=HEALTH_PROBE_TIMEOUT,
         )
     except Exception as e:
-        return False, f"error: {e}"
+        return False, f"error: {_redact(str(e), key)}"
     return True, "ok"
+
+
+async def _skipped(detail: str) -> tuple[bool, str]:
+    """A probe result for a tier that was deliberately never contacted -
+    lets check_provider_health keep one uniform asyncio.gather shape."""
+    return False, detail
+
+
+def _any_provider_configured(providers: list[dict]) -> bool:
+    """Whether a chat-backed tool has anything at all to try right now:
+    NVIDIA's key, or any one of `providers`' keys."""
+    return bool(_api_key()) or any(os.environ.get(p["env"]) for p in providers)
+
+
+def _no_provider_message(action: str, providers: list[dict]) -> str:
+    """The one 'nothing is configured' message shape every tool with no
+    keyless tier returns - factored out once so they can't drift apart.
+
+    It names what the user actually needs. The old blanket
+    "NVIDIA_API_KEY not set" guard did not: these tools run on any one of
+    several free-tier keys, and NVIDIA's is only the first of them."""
+    return (
+        f"{action}: no provider configured. Set {NVIDIA_API_KEY_ENV} in .env, "
+        f"or any of {', '.join(p['env'] for p in providers)} for a free-tier fallback."
+    )
 
 
 @mcp.tool()
@@ -404,45 +486,54 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
     fail - a provider outage no longer blocks generation entirely, it just
     silently drops the caller to a lower-quality free tier.
 
+    Works with NO API key at all: without NVIDIA_API_KEY the NVIDIA tier is
+    skipped and the keyless Pollinations tier is used directly.
+
     Args:
         prompt: Description of the image to generate.
         seed: Seed for reproducibility.
         width: Image width in pixels.
         height: Image height in pixels.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
-
+    # No NVIDIA_API_KEY is not a reason to fail: the Pollinations tier below
+    # is free and keyless, so an unkeyed caller simply starts there.
+    api_key = _api_key()
     errors = []
     async with httpx2.AsyncClient() as client:
-        for model in IMAGE_MODELS:
-            body = {
-                "prompt": prompt,
-                "steps": model["steps"],
-                "cfg_scale": model["cfg_scale"],
-                "seed": seed,
-                "width": width,
-                "height": height,
-            }
-            try:
-                resp = await client.post(f"{GENAI_BASE}/{model['slug']}", headers=HEADERS, json=body, timeout=45.0)
-            except httpx2.TimeoutException:
-                errors.append(f"{model['slug']}: timed out")
-                continue
-            if resp.status_code != 200:
-                errors.append(f"{model['slug']}: HTTP {resp.status_code} - {resp.text[:150]}")
-                continue
-            data = resp.json()
-            artifacts = data.get("artifacts")
-            if not artifacts:
-                errors.append(f"{model['slug']}: no artifacts in response")
-                continue
-            img_b64 = artifacts[0]["base64"]
-            OUTPUT_DIR.mkdir(exist_ok=True)
-            filename = f"{model['slug'].split('/')[-1]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            filepath = OUTPUT_DIR / filename
-            filepath.write_bytes(base64.b64decode(img_b64))
-            return f"Image saved to {filepath} (model: {model['slug']})"
+        if api_key:
+            headers = _headers()
+            for model in IMAGE_MODELS:
+                body = {
+                    "prompt": prompt,
+                    "steps": model["steps"],
+                    "cfg_scale": model["cfg_scale"],
+                    "seed": seed,
+                    "width": width,
+                    "height": height,
+                }
+                try:
+                    resp = await client.post(f"{GENAI_BASE}/{model['slug']}", headers=headers, json=body, timeout=45.0)
+                except httpx2.TimeoutException:
+                    errors.append(f"{model['slug']}: timed out")
+                    continue
+                if resp.status_code != 200:
+                    errors.append(
+                        f"{model['slug']}: HTTP {resp.status_code} - {_redact(resp.text[:150], api_key)}"
+                    )
+                    continue
+                data = resp.json()
+                artifacts = data.get("artifacts")
+                if not artifacts:
+                    errors.append(f"{model['slug']}: no artifacts in response")
+                    continue
+                img_b64 = artifacts[0]["base64"]
+                OUTPUT_DIR.mkdir(exist_ok=True)
+                filepath = OUTPUT_DIR / f"{model['slug'].split('/')[-1]}_{_stamp()}.jpg"
+                # Blocking disk write - off the event loop, not inline here.
+                await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
+                return f"Image saved to {filepath} (model: {model['slug']})"
+        else:
+            errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set in .env")
 
         try:
             image_bytes = await _generate_image_pollinations(client, prompt, seed, width, height)
@@ -450,9 +541,8 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
             errors.append(f"pollinations (fallback): {e}")
         else:
             OUTPUT_DIR.mkdir(exist_ok=True)
-            filename = f"pollinations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-            filepath = OUTPUT_DIR / filename
-            filepath.write_bytes(image_bytes)
+            filepath = OUTPUT_DIR / f"pollinations_{_stamp()}.jpg"
+            await asyncio.to_thread(filepath.write_bytes, image_bytes)
             return f"Image saved to {filepath} (model: pollinations, fallback after NVIDIA models failed)"
 
     return "All image models failed:\n" + "\n".join(errors)
@@ -465,12 +555,16 @@ async def translate_text(text: str, target_language: str) -> str:
     Tries a dedicated translation model first, falling back to general NVIDIA
     chat models, then Gemini/Groq/Mistral if those API keys are configured.
 
+    Needs NVIDIA_API_KEY *or* any one free-tier key (GROQ/MISTRAL/GEMINI/
+    CEREBRAS_API_KEY); without NVIDIA's, the chain simply starts at whichever
+    free-tier provider is configured.
+
     Args:
         text: The text to translate.
         target_language: Language to translate into, e.g. "Turkish", "Spanish".
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
+    if not _any_provider_configured(EXTRA_PROVIDERS):
+        return _no_provider_message("translate_text", EXTRA_PROVIDERS)
 
     messages = [{"role": "user", "content": f"Translate to {target_language}: {text}"}]
     result = await _multi_provider_chat(TRANSLATE_MODELS, messages)
@@ -489,12 +583,15 @@ async def ask_llm(question: str, system_prompt: str | None = None) -> str:
     Useful for a second opinion, or when you specifically want a non-Anthropic
     model's answer. Tries several strong models/providers in order as fallback.
 
+    Needs NVIDIA_API_KEY *or* any one free-tier key (GROQ/MISTRAL/GEMINI/
+    CEREBRAS_API_KEY).
+
     Args:
         question: The question or task to send.
         system_prompt: Optional system instruction.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
+    if not _any_provider_configured(EXTRA_PROVIDERS):
+        return _no_provider_message("ask_llm", EXTRA_PROVIDERS)
 
     messages = []
     if system_prompt:
@@ -516,12 +613,18 @@ async def describe_image(image_path: str, question: str = "Describe this image i
     Falls back to a free-tier vision-capable provider (Groq/Mistral/Gemini,
     whichever is configured in .env) if both NVIDIA vision models fail.
 
+    Needs NVIDIA_API_KEY *or* one of GROQ/MISTRAL/GEMINI_API_KEY - there is no
+    keyless vision tier, so with none of them set this fails fast and says so.
+
     Args:
         image_path: Absolute path to a local image file (jpg/png).
         question: What to ask about the image.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
+    # Checked before the file is even opened: there is no keyless vision tier,
+    # so with nothing configured the honest answer is "configure a provider",
+    # not a pointless read of the caller's file.
+    if not _any_provider_configured(VISION_PROVIDERS):
+        return _no_provider_message("describe_image", VISION_PROVIDERS)
 
     path = Path(image_path)
     if not path.is_file():
@@ -542,7 +645,9 @@ async def describe_image(image_path: str, question: str = "Describe this image i
             f"{DESCRIBE_IMAGE_MAX_BYTES} (base64 inflates it by a third on top)."
         )
     mime = "jpeg" if ext in ("jpg", "jpeg") else ext
-    img_b64 = base64.b64encode(path.read_bytes()).decode()
+    # Blocking disk read - off the event loop, same rule as every other
+    # file access in this module.
+    img_b64 = await asyncio.to_thread(_read_image_b64, path)
 
     messages = [
         {
@@ -579,11 +684,14 @@ async def check_content_safety(text: str) -> str:
     verdict, since a general chat model is less calibrated for this than a
     purpose-built classifier.
 
+    Needs NVIDIA_API_KEY *or* any one free-tier key (GROQ/MISTRAL/GEMINI/
+    CEREBRAS_API_KEY).
+
     Args:
         text: The text to check.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
+    if not _any_provider_configured(EXTRA_PROVIDERS):
+        return _no_provider_message("check_content_safety", EXTRA_PROVIDERS)
 
     messages = [{"role": "user", "content": text}]
     async with httpx2.AsyncClient() as client:
@@ -624,24 +732,31 @@ async def create_embedding(text: str) -> str:
     optional `local-embeddings` extra is installed (`uv sync --extra
     local-embeddings`); otherwise the failure is reported plainly.
 
+    Works with NO API key at all once that extra is installed: without
+    NVIDIA_API_KEY the hosted tier is skipped and the local model is used
+    directly.
+
     Args:
         text: The text to embed.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
-
+    # No NVIDIA_API_KEY is not a reason to fail: the local sentence-
+    # transformers tier below is keyless, so an unkeyed caller starts there.
+    api_key = _api_key()
     body = {"input": [text], "model": EMBED_MODEL, "input_type": "query"}
     resp = None
     request_error = None
-    async with httpx2.AsyncClient() as client:
-        try:
-            resp = await client.post(EMBED_URL, headers=HEADERS, json=body, timeout=30.0)
-        except Exception as e:
-            # Broad on purpose: a timeout is only one of several ways this
-            # request can fail (connection refused, DNS failure, TLS error,
-            # ...) and every one of them should still trigger the local
-            # fallback below, not crash the tool.
-            request_error = str(e)
+    if api_key:
+        async with httpx2.AsyncClient() as client:
+            try:
+                resp = await client.post(EMBED_URL, headers=_headers(), json=body, timeout=30.0)
+            except Exception as e:
+                # Broad on purpose: a timeout is only one of several ways this
+                # request can fail (connection refused, DNS failure, TLS error,
+                # ...) and every one of them should still trigger the local
+                # fallback below, not crash the tool.
+                request_error = _redact(str(e), api_key)
+    else:
+        request_error = f"{NVIDIA_API_KEY_ENV} not set in .env - NVIDIA tier skipped"
 
     if resp is not None and resp.status_code == 200:
         vector = resp.json()["data"][0]["embedding"]
@@ -651,16 +766,23 @@ async def create_embedding(text: str) -> str:
         model_used = f"local:{_LOCAL_EMBED_MODEL_NAME}"
 
     if vector is None:
-        detail = f"HTTP {resp.status_code} - {resp.text[:300]}" if resp is not None else request_error
+        detail = (
+            f"HTTP {resp.status_code} - {_redact(resp.text[:300], api_key)}"
+            if resp is not None
+            else request_error
+        )
         return (
             f"NVIDIA embedding failed ({detail}) and no local fallback available "
             "(run `uv sync --extra local-embeddings` to enable one)."
         )
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    filename = f"embedding_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    filepath = OUTPUT_DIR / filename
-    filepath.write_text(json.dumps({"text": text, "model": model_used, "vector": vector}))
+    filepath = OUTPUT_DIR / f"embedding_{_stamp()}.json"
+    # Blocking disk write - off the event loop, like the _local_embedding
+    # call above already is.
+    await asyncio.to_thread(
+        filepath.write_text, json.dumps({"text": text, "model": model_used, "vector": vector})
+    )
 
     return f"Embedding saved to {filepath} ({len(vector)} dimensions, model: {model_used})"
 
@@ -680,9 +802,14 @@ async def check_provider_health() -> str:
     rate-limited or retired on NVIDIA's platform without notice - use this
     to see what's actually alive right now instead of only discovering a
     dead model when a real request from one of the other tools fails.
+
+    Runs with or without NVIDIA_API_KEY: unset, the NVIDIA rows report
+    "not configured" and only the keyless/free-tier probes actually fire.
     """
-    if not API_KEY:
-        return "NVIDIA_API_KEY not set in .env - can't call the API."
+    # Deliberately NOT gated on NVIDIA_API_KEY: a diagnostic that refuses to
+    # run without a key is useless to exactly the caller who needs it. The
+    # NVIDIA rows report "not configured" instead of being probed.
+    api_key = _api_key()
 
     chat_models = sorted(set(TRANSLATE_MODELS) | set(LLM_MODELS) | set(VISION_MODELS) | {SAFETY_MODEL})
     image_slugs = [m["slug"] for m in IMAGE_MODELS]
@@ -695,10 +822,23 @@ async def check_provider_health() -> str:
     free_providers = list({p["model"]: p for p in (*EXTRA_PROVIDERS, *VISION_PROVIDERS)}.values())
 
     async with httpx2.AsyncClient() as client:
+        if api_key:
+            chat_probes = [_bounded(sem, _probe_nvidia_chat_model(client, m)) for m in chat_models]
+            image_probes = [_bounded(sem, _probe_nvidia_image_model(client, s)) for s in image_slugs]
+            embed_probe = _bounded(sem, _probe_nvidia_embed_model(client, EMBED_MODEL))
+        else:
+            # Probing without a key would send "Bearer None" and report the
+            # same uninformative 401 for every model - say what is actually
+            # wrong instead, and spend no requests doing it.
+            detail = f"not configured ({NVIDIA_API_KEY_ENV} not set)"
+            chat_probes = [_skipped(detail) for _ in chat_models]
+            image_probes = [_skipped(detail) for _ in image_slugs]
+            embed_probe = _skipped(detail)
+
         chat_results, image_results, embed_result, pollinations_result, free_provider_results = await asyncio.gather(
-            asyncio.gather(*(_bounded(sem, _probe_nvidia_chat_model(client, m)) for m in chat_models)),
-            asyncio.gather(*(_bounded(sem, _probe_nvidia_image_model(client, s)) for s in image_slugs)),
-            _bounded(sem, _probe_nvidia_embed_model(client, EMBED_MODEL)),
+            asyncio.gather(*chat_probes),
+            asyncio.gather(*image_probes),
+            embed_probe,
             _bounded(sem, _probe_pollinations(client)),
             asyncio.gather(*(_bounded(sem, _probe_extra_provider(p)) for p in free_providers)),
         )
