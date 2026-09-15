@@ -41,7 +41,7 @@
     <rect x="30" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
   </g>
   <circle cx="90" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="90" y="102" text-anchor="middle" font-size="30">🖼️</text>
+  <text x="90" y="102" text-anchor="middle" font-size="30"></text>
   <text x="136" y="82" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">generate_image()</text>
   <text x="136" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Text-to-image via FLUX models,</text>
   <text x="136" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">saved locally to output/</text>
@@ -52,7 +52,7 @@
     <rect x="420" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
   </g>
   <circle cx="480" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="480" y="102" text-anchor="middle" font-size="30">🌐</text>
+  <text x="480" y="102" text-anchor="middle" font-size="30"></text>
   <text x="526" y="82" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">translate_text()</text>
   <text x="526" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Translation with automatic</text>
   <text x="526" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">model + provider fallback</text>
@@ -63,7 +63,7 @@
     <rect x="810" y="30" width="360" height="150" rx="14" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8"/>
   </g>
   <circle cx="870" cy="90" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="870" y="102" text-anchor="middle" font-size="30">💬</text>
+  <text x="870" y="102" text-anchor="middle" font-size="30"></text>
   <text x="916" y="82" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">ask_llm()</text>
   <text x="916" y="106" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Second opinion from a</text>
   <text x="916" y="124" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">non-Anthropic model</text>
@@ -74,7 +74,7 @@
     <rect x="30" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
   </g>
   <circle cx="90" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="90" y="287" text-anchor="middle" font-size="30">👁️</text>
+  <text x="90" y="287" text-anchor="middle" font-size="30"></text>
   <text x="136" y="267" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">describe_image()</text>
   <text x="136" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Vision-language description</text>
   <text x="136" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">of a local image file</text>
@@ -85,7 +85,7 @@
     <rect x="420" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
   </g>
   <circle cx="480" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="480" y="287" text-anchor="middle" font-size="30">🛡️</text>
+  <text x="480" y="287" text-anchor="middle" font-size="30"></text>
   <text x="526" y="267" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">check_content_safety()</text>
   <text x="526" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Safe/unsafe verdict on a</text>
   <text x="526" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">piece of text</text>
@@ -96,7 +96,7 @@
     <rect x="810" y="215" width="360" height="150" rx="14" fill="#0f1a08" stroke="#76b900" stroke-width="1.6"/>
   </g>
   <circle cx="870" cy="275" r="32" fill="url(#iconGrad)" filter="url(#glow3)"/>
-  <text x="870" y="287" text-anchor="middle" font-size="30">🔗</text>
+  <text x="870" y="287" text-anchor="middle" font-size="30"></text>
   <text x="916" y="267" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="17" font-weight="700" fill="#eafce0">create_embedding()</text>
   <text x="916" y="291" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">Semantic embedding vector,</text>
   <text x="916" y="309" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#a9d98a">saved to output/*.json</text>
