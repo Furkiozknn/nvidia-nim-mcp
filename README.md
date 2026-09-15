@@ -25,6 +25,7 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 - [Example usage](#-example-usage)
 - [Output files](#-output-files)
 - [Development](#-development)
+- [Testing](#-testing)
 - [Project layout](#-project-layout)
 - [License](#-license)
 
@@ -34,15 +35,17 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 
 Seven tools. Six are backed by their own model chain; the seventh checks the health of every model the other six actually use. Every generation tool now has at least one fallback beyond NVIDIA — see [The fallback chain](#-the-fallback-chain) for exactly how each one is shaped.
 
-| Tool | What it does | NVIDIA model chain (in order) | Fallback beyond NVIDIA |
-|---|---|---|---|
-| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | Pollinations.ai (free, keyless) |
-| 🌐 `translate_text` | Translate text into any target language | `riva-translate-4b-instruct-v2` → `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured |
-| 💬 `ask_llm` | Ask a non-Anthropic model for a second opinion | `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured |
-| 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | Groq/Mistral/Gemini vision models, whichever configured |
-| 🛡️ `check_content_safety` | Safe/unsafe verdict on a piece of text | `nemotron-3.5-content-safety` | Best-effort classification prompt via Groq/Mistral/Gemini/Cerebras |
-| 🔗 `create_embedding` | Semantic embedding vector, saved to `output/` | `nemotron-3-embed-1b` | Local sentence-transformers (`local-embeddings` extra, opt-in) |
-| 🩺 `check_provider_health` | Liveness probe for every model above, without generating real content | every model used by the other six, concurrently | checks every fallback tier too |
+| Tool | What it does | NVIDIA model chain (in order) | Fallback beyond NVIDIA | Works without `NVIDIA_API_KEY`? |
+|---|---|---|---|---|
+| 🖼️ `generate_image` | Text-to-image via FLUX, saved to `output/` | `flux.1-dev` → `flux.2-klein-4b` | Pollinations.ai (free, keyless) | ✅ **Yes** — no key of any kind needed |
+| 🌐 `translate_text` | Translate text into any target language | `riva-translate-4b-instruct-v2` → `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured | ⚠️ With any one of `GROQ`/`MISTRAL`/`GEMINI`/`CEREBRAS_API_KEY` |
+| 💬 `ask_llm` | Ask a non-Anthropic model for a second opinion | `llama-3.3-nemotron-super-49b-v1.5` → `gpt-oss-120b` | Groq/Mistral/Gemini/Cerebras, whichever configured | ⚠️ With any one of `GROQ`/`MISTRAL`/`GEMINI`/`CEREBRAS_API_KEY` |
+| 👁️ `describe_image` | Vision-language description of a local image | `nemotron-nano-12b-v2-vl` → `llama-3.2-11b-vision-instruct` | Groq/Mistral/Gemini vision models, whichever configured | ⚠️ With any one of `GROQ`/`MISTRAL`/`GEMINI_API_KEY` |
+| 🛡️ `check_content_safety` | Safe/unsafe verdict on a piece of text | `nemotron-3.5-content-safety` | Best-effort classification prompt via Groq/Mistral/Gemini/Cerebras | ⚠️ With any one of `GROQ`/`MISTRAL`/`GEMINI`/`CEREBRAS_API_KEY` |
+| 🔗 `create_embedding` | Semantic embedding vector, saved to `output/` | `nemotron-3-embed-1b` | Local sentence-transformers (`local-embeddings` extra, opt-in) | ✅ **Yes** — with `uv sync --extra local-embeddings`, no key needed |
+| 🩺 `check_provider_health` | Liveness probe for every model above, without generating real content | every model used by the other six, concurrently | checks every fallback tier too | ✅ **Yes** — NVIDIA rows report *not configured* instead of being probed |
+
+**`NVIDIA_API_KEY` gates the NVIDIA tier, not the tool.** When it is unset, each tool skips straight to its documented fallback instead of refusing to run; the two tools with a genuinely keyless tier (`generate_image`, `create_embedding`) work with **no API key at all**. The four marked ⚠️ have no keyless tier, so with nothing configured they return a message naming every key that *would* work — NVIDIA's and each free-tier alternative — rather than demanding NVIDIA's specifically.
 
 Every model in these chains was confirmed working with a real request before being wired in — see the comments at the top of `nvidia_image.py` for the verification notes (including two models that were removed after NVIDIA retired them outright, HTTP 410). `check_provider_health` exists precisely because that kind of silent retirement keeps happening — run it to see what's actually alive right now instead of finding out mid-request.
 
@@ -66,9 +69,10 @@ This is the one feature worth understanding properly, because it's not the same 
 
    Any provider whose key is missing from `.env` is skipped silently — no error, no code change needed. Drop a key in and it joins the chain on the next call.
 3. **`generate_image`** also has one fallback tier, but a different one: if both `flux.1-dev` and `flux.2-klein-4b` fail, it drops to [Pollinations.ai](https://pollinations.ai/) — free, keyless, no `.env` entry required. It's a lower-quality tier than either NVIDIA model, so it's deliberately last-resort rather than tried first for speed.
-4. **`describe_image`, `check_content_safety`, and `create_embedding` stay NVIDIA-only.** If every model in their chain fails, you get back a clear error string listing what was tried — nothing throws, and nothing silently falls through to another provider.
+4. **`describe_image`** falls through to a vision-capable free-tier model (`groq/qwen/qwen3.6-27b`, `mistral/pixtral-12b-2409`, `gemini/gemini-flash-latest`) — a separate list from the one above, because not every text model there can see. **`check_content_safety`** falls through to a best-effort classification prompt on the same chain as `translate_text`, clearly labelled as a fallback verdict. **`create_embedding`** falls through to a fully local, keyless `sentence-transformers` model, available once the opt-in `local-embeddings` extra is installed.
+5. **A missing `NVIDIA_API_KEY` is just a missing first tier.** Every step above starts wherever it can: no NVIDIA key means the NVIDIA entries are left out of the chain entirely rather than attempted with an empty `Authorization` header. See the **Works without `NVIDIA_API_KEY`?** column in the tools table for what that leaves you with per tool.
 
-Why the split? Image generation has one free, keyless fallback (Pollinations) worth using since it costs nothing to try; vision, safety, and embeddings depend on NVIDIA-specific model shapes with no equivalent free tier elsewhere yet; chat-style text generation has the widest safety net since more free-tier LLM providers exist. Nothing stops the other tools from growing one later.
+Why the split? Image generation and embeddings each have a genuinely keyless tier (Pollinations, and a local ONNX/torch model) worth using since they cost nothing; vision, safety, and chat depend on a hosted provider of some kind, so their fallback is "a different provider's free tier", not "no provider".
 
 ## ⚙️ Setup
 
@@ -81,7 +85,7 @@ uv sync
 **2. Create a `.env` file** in the project root. `.env.example` shows the shape:
 
 ```bash
-# Required — get a free key at https://build.nvidia.com/
+# Recommended — unlocks the highest-quality tier of every tool.
 NVIDIA_API_KEY=your-key-here
 
 # Optional — extend the fallback chain. Each is skipped silently if unset.
@@ -91,11 +95,13 @@ GEMINI_API_KEY=
 CEREBRAS_API_KEY=
 ```
 
-Only `NVIDIA_API_KEY` is required. Get one for free at [build.nvidia.com](https://build.nvidia.com/) — no credit card. The four extras are entirely optional and only affect `translate_text` and `ask_llm`; add whichever free-tier keys you already have to widen their fallback chain.
+`NVIDIA_API_KEY` is strongly **recommended** rather than strictly required: it unlocks the highest-quality tier of every tool, and gets you one for free at [build.nvidia.com](https://build.nvidia.com/) with no credit card. Without it, `generate_image` and `create_embedding` still work on their keyless tiers, and the other four work off any one free-tier key — see the tools table. The extras widen the fallback chain for `translate_text`, `ask_llm`, `check_content_safety` and `describe_image`.
+
+The key is read from the environment **per request**, not once at startup, so rotating it (or writing `.env` after the server is already running) takes effect on the next call — no restart.
 
 | Provider | Get a free key |
 |---|---|
-| NVIDIA NIM (required) | [build.nvidia.com](https://build.nvidia.com/) |
+| NVIDIA NIM (recommended) | [build.nvidia.com](https://build.nvidia.com/) |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) |
 | Mistral | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) |
 | Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
@@ -114,7 +120,7 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 
 ```
 "Generate an image of a cyberpunk cat riding a motorcycle through Istanbul at night"
-→ generate_image  → saved to output/flux.1-dev_20260830_153000.jpg
+→ generate_image  → saved to output/flux.1-dev_20260830_153000_481902.jpg
 
 "Translate this changelog entry to Turkish"
 → translate_text  → tries riva-translate → nemotron → gpt-oss → (Groq/Mistral/Gemini/Cerebras if configured)
@@ -129,7 +135,7 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 → check_content_safety → nemotron-3.5-content-safety verdict
 
 "Create an embedding for this paragraph so I can search similar ones later"
-→ create_embedding → saved to output/embedding_20260830_153000.json
+→ create_embedding → saved to output/embedding_20260830_153000_481902.json
 
 "Which of the NVIDIA models are actually working right now?"
 → check_provider_health → per-model OK/FAIL report across all 6 tools' chains
@@ -137,16 +143,31 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 
 ## 📁 Output files
 
-`generate_image` and `create_embedding` write to `output/` in the project root (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Every other tool returns its result directly as text, with the model that answered noted at the end.
+`generate_image` and `create_embedding` write to `output/` in the project root (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Timestamps carry **microsecond** precision, so two calls landing in the same wall-clock second get two files instead of one overwriting the other. Every other tool returns its result directly as text, with the model that answered noted at the end.
 
 ## 🛠 Development
 
 ```bash
 uv sync --group dev
-uv run pytest
 ```
 
-The suite (`tests/`) mocks every HTTP/litellm call — no `NVIDIA_API_KEY` or real network access needed to run it. It covers the fallback-chain ordering, the cross-provider gating logic, the `.env`-not-set guard on each tool, and `check_provider_health`'s per-model OK/FAIL reporting (including that one dead model never hides the others' status). CI (`.github/workflows/ci.yml`) runs the same command on every push/PR.
+## 🧪 Testing
+
+```bash
+uv run pytest                            # the whole suite
+uv run pytest tests/test_api_key_guard.py  # one module
+uv run pytest -q                         # quiet
+```
+
+The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and no network access needed to run it**, and nothing in it reaches a real provider. It covers:
+
+- **fallback-chain ordering** per tool, and the cross-provider gating logic (`tests/test_fallback.py`, `tests/test_build_chat_chain.py`);
+- **what each tool does with no `NVIDIA_API_KEY`** — that the keyless tiers are actually reached, and that the tools without one name every key that would work (`tests/test_api_key_guard.py`);
+- **the upload guards** on `describe_image` and the bounded, content-verified Pollinations download (`tests/test_generate_image.py`, `tests/test_describe_image_fallback.py`);
+- **output-filename collisions** — two calls in the same wall-clock second must not overwrite each other — and that a provider's error body is returned with the API key scrubbed out;
+- **`check_provider_health`'s per-model OK/FAIL reporting**, including that one dead model never hides the others' status.
+
+CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push/PR.
 
 ## 🗂 Project layout
 
