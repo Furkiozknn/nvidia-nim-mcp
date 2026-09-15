@@ -24,7 +24,11 @@ GENAI_BASE = "https://ai.api.nvidia.com/v1/genai"
 CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 EMBED_URL = "https://integrate.api.nvidia.com/v1/embeddings"
 
-OUTPUT_DIR = Path(__file__).parent / "output"
+# Path(__file__).parent would write inside the installed package: for a
+# pip-installed user that is site-packages. Default to the current working
+# directory instead, overridable with NVIDIA_NIM_OUTPUT_DIR. Same fix as
+# voice-io-mcp and mini-creative-toolkit, which had the identical bug.
+OUTPUT_DIR = Path(os.environ.get("NVIDIA_NIM_OUTPUT_DIR") or Path.cwd() / "output")
 
 
 def _api_key() -> str | None:
@@ -527,7 +531,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                     errors.append(f"{model['slug']}: no artifacts in response")
                     continue
                 img_b64 = artifacts[0]["base64"]
-                OUTPUT_DIR.mkdir(exist_ok=True)
+                OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 filepath = OUTPUT_DIR / f"{model['slug'].split('/')[-1]}_{_stamp()}.jpg"
                 # Blocking disk write - off the event loop, not inline here.
                 await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
@@ -540,7 +544,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
         except Exception as e:
             errors.append(f"pollinations (fallback): {e}")
         else:
-            OUTPUT_DIR.mkdir(exist_ok=True)
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             filepath = OUTPUT_DIR / f"pollinations_{_stamp()}.jpg"
             await asyncio.to_thread(filepath.write_bytes, image_bytes)
             return f"Image saved to {filepath} (model: pollinations, fallback after NVIDIA models failed)"
@@ -776,7 +780,7 @@ async def create_embedding(text: str) -> str:
             "(run `uv sync --extra local-embeddings` to enable one)."
         )
 
-    OUTPUT_DIR.mkdir(exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     filepath = OUTPUT_DIR / f"embedding_{_stamp()}.json"
     # Blocking disk write - off the event loop, like the _local_embedding
     # call above already is.
@@ -882,12 +886,12 @@ async def check_provider_health() -> str:
 
 
 def main() -> None:
-    """Konsol giris noktasi.
+    """Console entry point.
 
-    Ayri bir fonksiyon, cunku `[project.scripts]` bir modul degil bir
-    CAGRILABILIR istiyor. Bu olmadan paket kurulabiliyor ama
-    calistirilamiyor: kullanicinin depoyu klonlayip dosyaya yol
-    gostermesi gerekiyor, ki bu da yayinlamanin amacini bosa cikariyor.
+    A separate function because `[project.scripts]` wants a CALLABLE, not a
+    module. Without it the package installs but cannot be run: the user would
+    have to clone the repository and point at the file, which defeats the
+    point of publishing it.
     """
     mcp.run(transport="stdio")
 

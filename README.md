@@ -143,7 +143,14 @@ Once registered, just ask Claude Code in plain language — it picks the right t
 
 ## 📁 Output files
 
-`generate_image` and `create_embedding` write to `output/` in the project root (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Timestamps carry **microsecond** precision, so two calls landing in the same wall-clock second get two files instead of one overwriting the other. Every other tool returns its result directly as text, with the model that answered noted at the end.
+Generated files land in `output/` **under the directory you run the server
+from**, not inside the installed package. Override with
+`NVIDIA_NIM_OUTPUT_DIR=/some/path`.
+
+<sub>Earlier versions resolved this from `Path(__file__).parent`, which for a
+`pip install`ed user meant writing generated images into `site-packages`.</sub>
+
+`generate_image` and `create_embedding` write to that directory (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Timestamps carry **microsecond** precision, so two calls landing in the same wall-clock second get two files instead of one overwriting the other. Every other tool returns its result directly as text, with the model that answered noted at the end.
 
 ## 🛠 Development
 
