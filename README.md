@@ -176,6 +176,22 @@ The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and
 
 CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push/PR.
 
+## What this server can actually do
+
+The expensive question about an MCP server is not what it promises but what it
+**can do on your machine**: which credentials it can touch, where it connects,
+what it runs. Answering that means reading the source, and most people will not.
+
+On every push, [mcp-vet](https://github.com/Furkiozknn/mcp-vet) from the same
+account audits this server from source and writes the whole report into the job
+summary. Today's verdict: **LOW** (minor findings only). The gate closes at HIGH and
+above — and it also closes if the tool itself could not run, because "I could not
+look" should not read as green.
+
+Auditing our own server with our own tool had a side effect worth recording: adding
+this job surfaced a real false positive in mcp-vet, which was fixed. A tool nobody
+runs stays right by default.
+
 ## 🗂 Project layout
 
 ```

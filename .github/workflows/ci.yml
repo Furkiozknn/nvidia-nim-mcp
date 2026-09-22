@@ -67,3 +67,42 @@ jobs:
           # hedefin var ve cagrilabilir oldugu dogrulaniyor.
           VIRTUAL_ENV=/tmp/deneme /tmp/deneme/bin/python -c "import nvidia_image as m; assert callable(m.main), 'main cagrilabilir degil'"
           echo "nvidia-nim-mcp kuruldu, giris noktasi cagrilabilir"
+
+  denetim:
+    name: mcp-vet (kendi sunucumuza kendi aracimiz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+
+      # Ayni hesaptaki mcp-vet: bir MCP sunucusunun ne yapabildigini
+      # kaynaktan cikariyor -- hangi kimlik bilgilerine dokunuyor, nereye
+      # baglaniyor, ne calistiriyor. Kendi sunucumuzu kendi aracimizla
+      # denetlemek, aracin da sunucunun da yanlis bulgusunu ortaya cikariyor:
+      # bu is eklenirken mcp-vet'te gercek bir yanlis pozitif bulundu ve
+      # duzeltildi (savunma amacli bir denylist, kimlik okumak sanilmisti).
+      - name: mcp-vet'i kur
+        run: uv tool install git+https://github.com/Furkiozknn/mcp-vet
+
+      # --offline: ag yok, yalnizca kaynak analizi. Depo zaten burada.
+      - name: Denetle
+        run: |
+          set -uo pipefail
+          mcp-vet audit --offline --path . | tee /tmp/mcpvet.txt
+          kod=${PIPESTATUS[0]}
+          {
+            echo '### mcp-vet'
+            echo ''
+            echo '```'
+            cat /tmp/mcpvet.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 0 temiz, 1 LOW/MEDIUM, 2 HIGH, 3 CRITICAL, 4 arac kosamadi.
+          # Kapi HIGH ve uzerinde kapaniyor: LOW/MEDIUM bulgular bu sunucuda
+          # gercek ve bilinen yetenekleri anlatiyor (dis surec calistirmak
+          # gibi), onlari kirmiziya cevirmek kapiyi anlamsizlastirirdi.
+          # Aracin kendisi kosamadiysa (4) bu da bir arizadir, yesil degil.
+          case "$kod" in
+            0|1) echo "gecti (cikis $kod)" ;;
+            *)   echo "mcp-vet cikis $kod"; exit 1 ;;
+          esac
