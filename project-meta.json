@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0.0",
+  "id": "nvidia-nim-mcp",
+  "owner": "Furkiozknn",
+  "repository": "https://github.com/Furkiozknn/nvidia-nim-mcp",
+  "homepage": null,
+  "releases": "https://github.com/Furkiozknn/nvidia-nim-mcp/releases",
+  "status": "active",
+  "category": "mcp-server",
+  "platform": [
+    "mcp"
+  ],
+  "primary_language": "Python",
+  "technologies": [
+    "Python 3.11+",
+    "NVIDIA NIM",
+    "Groq",
+    "Mistral",
+    "Gemini",
+    "Cerebras"
+  ],
+  "version": "0.1.0",
+  "license": "MIT",
+  "topics": [
+    "ai",
+    "cerebras",
+    "claude-code",
+    "fallback",
+    "free-tier",
+    "gemini",
+    "groq",
+    "image-generation",
+    "llm",
+    "mcp",
+    "mcp-server",
+    "mistral",
+    "model-context-protocol",
+    "nvidia",
+    "nvidia-nim",
+    "python"
+  ],
+  "summary": "Seven MCP tools on NVIDIA NIM's free tier - image, vision, translation, chat, content safety, embeddings, plus a health probe that tells you which models are still alive. Two of them need no API key at all. Falls through to Groq, Mistral, Gemini or Cerebras when a model is rate-limited or quietly retired. 80 tests.",
+  "key_features": [
+    "Seven MCP tools on NVIDIA NIM's free tier: image, vision, translation, chat, content safety, embeddings, plus a health probe that tells you which models are still alive",
+    "Two of the seven need no API key at all",
+    "Falls through to Groq, Mistral, Gemini or Cerebras when a model is rate-limited or quietly retired",
+    "Output files land where you can find them, documented in the README"
+  ],
+  "media": {
+    "hero": "assets/banner.svg",
+    "screenshots": [],
+    "gifs": [],
+    "videos": []
+  },
+  "tests": {
+    "count": 80,
+    "source": "`80 passed`",
+    "measured": "2026-09-15"
+  },
+  "ci": {
+    "workflows": [
+      "ci.yml",
+      "yayinla.yml"
+    ],
+    "badge": "https://github.com/Furkiozknn/nvidia-nim-mcp/actions/workflows/ci.yml/badge.svg"
+  },
+  "docs": {
+    "readme": "README.md",
+    "changelog": null,
+    "roadmap": null,
+    "security": "SECURITY.md",
+    "contributing": "CONTRIBUTING.md",
+    "license_file": "LICENSE"
+  },
+  "social": {
+    "headline": "Seven MCP tools on a free tier - and a fallback chain for when a model quietly dies.",
+    "hashtags": [
+      "mcp",
+      "nvidia",
+      "llm",
+      "freetier"
+    ],
+    "primary_link": "https://github.com/Furkiozknn/nvidia-nim-mcp"
+  },
+  "provenance": {
+    "generated_at": "2026-09-22",
+    "generator": "ghcc/gen_meta.py",
+    "rule": "mechanical fields read from the repository and the GitHub API; editorial fields hand-written and reviewed; no field is generated from a guess"
+  }
+}
