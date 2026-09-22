@@ -198,3 +198,14 @@ MIT — see [LICENSE](LICENSE).
 <div align="center">
 <sub>Bir hobi projesi olarak başladı, hâlâ öyle. NVIDIA'nın ücretsiz katmanını Claude Code'a bağlayan küçük ama işini yapan bir köprü. 🟢</sub>
 </div>
+
+---
+
+## More from this ecosystem
+
+- **[mini-creative-toolkit](https://github.com/Furkiozknn/mini-creative-toolkit)** — 23 CPU-first media tools behind one MCP server
+- **[local-notes-search-mcp](https://github.com/Furkiozknn/local-notes-search-mcp)** — ask your own files a question, with no network
+- **[voice-io-mcp](https://github.com/Furkiozknn/voice-io-mcp)** — speech in and out, needing no API key
+- **[mcp-vet](https://github.com/Furkiozknn/mcp-vet)** — audits an MCP server's source before you install it
+
+<sub>All of them in one searchable page: **[furkiozknn.github.io](https://furkiozknn.github.io/)** — each card is generated from that repository's own <code>project-meta.json</code>.</sub>
