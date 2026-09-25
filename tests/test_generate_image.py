@@ -3,7 +3,7 @@ free fallback tier when every NVIDIA model fails."""
 import pytest
 
 import nvidia_image
-from conftest import FakeResponse
+from conftest import FakeAsyncClient, FakeResponse
 
 
 @pytest.mark.asyncio
@@ -59,10 +59,7 @@ async def test_generate_image_reports_pollinations_error_when_everything_fails(
 
 @pytest.mark.asyncio
 async def test_probe_pollinations_ok():
-    from unittest.mock import AsyncMock
-
-    client = AsyncMock()
-    client.get = AsyncMock(return_value=FakeResponse(200))
+    client = FakeAsyncClient(get_side_effect=lambda *a, **kw: FakeResponse(200))
 
     ok, detail = await nvidia_image._probe_pollinations(client)
 
@@ -72,10 +69,7 @@ async def test_probe_pollinations_ok():
 
 @pytest.mark.asyncio
 async def test_probe_pollinations_http_error():
-    from unittest.mock import AsyncMock
-
-    client = AsyncMock()
-    client.get = AsyncMock(return_value=FakeResponse(500))
+    client = FakeAsyncClient(get_side_effect=lambda *a, **kw: FakeResponse(500))
 
     ok, detail = await nvidia_image._probe_pollinations(client)
 
@@ -85,10 +79,7 @@ async def test_probe_pollinations_http_error():
 
 @pytest.mark.asyncio
 async def test_probe_pollinations_timeout_is_caught_not_raised():
-    from unittest.mock import AsyncMock
-
-    client = AsyncMock()
-    client.get = AsyncMock(side_effect=nvidia_image.httpx2.TimeoutException("slow"))
+    client = FakeAsyncClient(get_side_effect=nvidia_image.httpx2.TimeoutException("slow"))
 
     ok, detail = await nvidia_image._probe_pollinations(client)
 

@@ -39,7 +39,7 @@
     "nvidia-nim",
     "python"
   ],
-  "summary": "Seven MCP tools on NVIDIA NIM's free tier - image, vision, translation, chat, content safety, embeddings, plus a health probe that tells you which models are still alive. Two of them need no API key at all. Falls through to Groq, Mistral, Gemini or Cerebras when a model is rate-limited or quietly retired. 80 tests.",
+  "summary": "Seven MCP tools on NVIDIA NIM's free tier - image, vision, translation, chat, content safety, embeddings, plus a health probe that tells you which models are still alive. Two of them need no API key at all. Falls through to Groq, Mistral, Gemini or Cerebras when a model is rate-limited or quietly retired. 124 tests.",
   "key_features": [
     "Seven MCP tools on NVIDIA NIM's free tier: image, vision, translation, chat, content safety, embeddings, plus a health probe that tells you which models are still alive",
     "Two of the seven need no API key at all",
@@ -53,9 +53,9 @@
     "videos": []
   },
   "tests": {
-    "count": 80,
-    "source": "`80 passed`",
-    "measured": "2026-09-15"
+    "count": 124,
+    "source": "`124 passed`",
+    "measured": "2026-09-25"
   },
   "ci": {
     "workflows": [
@@ -66,7 +66,7 @@
   },
   "docs": {
     "readme": "README.md",
-    "changelog": null,
+    "changelog": "CHANGELOG.md",
     "version_history": null,
     "roadmap": null,
     "security": "SECURITY.md",

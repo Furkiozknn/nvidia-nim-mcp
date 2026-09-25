@@ -13,9 +13,23 @@
 
 An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, embeddings, and a provider health check — behind seven small, consistent tools.
 
-The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and two of them — translation and the "ask another LLM" tool — keep going past NVIDIA into whichever free-tier providers you've configured (Groq, Mistral, Gemini, Cerebras). The caller never has to know or care which model actually answered.
+The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and every generation tool has a fallback beyond NVIDIA: a keyless image backend, a local embedding model, or whichever other providers you've configured (Groq and Mistral on their free tiers; Gemini and Cerebras optionally). The caller never has to know or care which model actually answered.
 
-Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build.nvidia.com/).
+Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build.nvidia.com/) — or none at all for the two keyless tools. (Cerebras is the one optional provider that needs a payment method; see [the fallback chain](#-the-fallback-chain).)
+
+## Quick start
+
+Needs [`uv`](https://docs.astral.sh/uv/) and Claude Code.
+
+```bash
+git clone https://github.com/Furkiozknn/nvidia-nim-mcp
+cd nvidia-nim-mcp
+uv sync
+cp .env.example .env    # optional: fill in NVIDIA_API_KEY and any free-tier keys
+claude mcp add --transport stdio nvidia-nim -- uv run --directory "$PWD" nvidia_image.py
+```
+
+Then ask Claude Code *"generate an image of a red bicycle"*. That works with no key at all: without `NVIDIA_API_KEY` it goes straight to the keyless Pollinations tier and saves the file under `output/` in the repository. *"Which of the nvidia-nim providers are alive right now?"* runs `check_provider_health` and shows which of your keys actually work.
 
 ## Table of Contents
 
@@ -24,6 +38,7 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 - [Setup](#-setup)
 - [Example usage](#-example-usage)
 - [Output files](#-output-files)
+- [What leaves your machine](#-what-leaves-your-machine)
 - [Development](#-development)
 - [Testing](#-testing)
 - [Project layout](#-project-layout)
@@ -60,14 +75,14 @@ This is the one feature worth understanding properly, because it's not the same 
 1. **All six generation tools** try their NVIDIA models first, in the order shown in the table above. The first one that answers wins. (`check_provider_health` is different — it probes every model instead of stopping at the first success; see its row above.)
 2. **`translate_text` and `ask_llm`** keep going if every NVIDIA model in their chain fails. They fall through to whichever of these you've configured, in this fixed order:
 
-   | Order | Provider | Model | Gate |
-   |---|---|---|---|
-   | 1 | Groq | `groq/openai/gpt-oss-120b` | `GROQ_API_KEY` |
-   | 2 | Mistral | `mistral/mistral-small-latest` | `MISTRAL_API_KEY` |
-   | 3 | Gemini | `gemini/gemini-flash-latest` | `GEMINI_API_KEY` |
-   | 4 | Cerebras | `cerebras/gpt-oss-120b` | `CEREBRAS_API_KEY` |
+   | Order | Provider | Model | Gate | Status |
+   |---|---|---|---|---|
+   | 1 | Groq | `groq/openai/gpt-oss-120b` | `GROQ_API_KEY` | Free tier, verified with a real call |
+   | 2 | Mistral | `mistral/mistral-small-latest` | `MISTRAL_API_KEY` | Free tier, verified with a real call |
+   | 3 | Gemini | `gemini/gemini-flash-latest` | `GEMINI_API_KEY` | Optional. Not verified: the test project got `PERMISSION_DENIED` until moved to a paid plan; keys from other projects may work |
+   | 4 | Cerebras | `cerebras/gpt-oss-120b` | `CEREBRAS_API_KEY` | Optional, **not free**: answers `Payment required` until the account has a payment method |
 
-   Any provider whose key is missing from `.env` is skipped silently — no error, no code change needed. Drop a key in and it joins the chain on the next call.
+   Any provider whose key is missing from `.env` is skipped silently — no error, no code change needed. Drop a key in and it joins the chain on the next call. A configured provider that fails costs one failed call before the chain moves on; `check_provider_health` shows which of them actually answer with your keys.
 3. **`generate_image`** also has one fallback tier, but a different one: if both `flux.1-dev` and `flux.2-klein-4b` fail, it drops to [Pollinations.ai](https://pollinations.ai/) — free, keyless, no `.env` entry required. It's a lower-quality tier than either NVIDIA model, so it's deliberately last-resort rather than tried first for speed.
 4. **`describe_image`** falls through to a vision-capable free-tier model (`groq/qwen/qwen3.6-27b`, `mistral/pixtral-12b-2409`, `gemini/gemini-flash-latest`) — a separate list from the one above, because not every text model there can see. **`check_content_safety`** falls through to a best-effort classification prompt on the same chain as `translate_text`, clearly labelled as a fallback verdict. **`create_embedding`** falls through to a fully local, keyless `sentence-transformers` model, available once the opt-in `local-embeddings` extra is installed.
 5. **A missing `NVIDIA_API_KEY` is just a missing first tier.** Every step above starts wherever it can: no NVIDIA key means the NVIDIA entries are left out of the chain entirely rather than attempted with an empty `Authorization` header. See the **Works without `NVIDIA_API_KEY`?** column in the tools table for what that leaves you with per tool.
@@ -86,7 +101,7 @@ uv sync
 
 ```bash
 # Recommended — unlocks the highest-quality tier of every tool.
-NVIDIA_API_KEY=your-key-here
+NVIDIA_API_KEY=
 
 # Optional — extend the fallback chain. Each is skipped silently if unset.
 GROQ_API_KEY=
@@ -97,20 +112,23 @@ CEREBRAS_API_KEY=
 
 `NVIDIA_API_KEY` is strongly **recommended** rather than strictly required: it unlocks the highest-quality tier of every tool, and gets you one for free at [build.nvidia.com](https://build.nvidia.com/) with no credit card. Without it, `generate_image` and `create_embedding` still work on their keyless tiers, and the other four work off any one free-tier key — see the tools table. The extras widen the fallback chain for `translate_text`, `ask_llm`, `check_content_safety` and `describe_image`.
 
-The key is read from the environment **per request**, not once at startup, so rotating it (or writing `.env` after the server is already running) takes effect on the next call — no restart.
+`.env` is read **once, when the server starts**, from the directory that holds `nvidia_image.py`. After you add or change a key, restart the server: in Claude Code, run `/mcp` and reconnect `nvidia-nim`. You can also pass keys through the MCP client's own environment instead of `.env`, for example `claude mcp add ... -e GROQ_API_KEY=...`. Keys already in the environment take precedence over `.env`.
 
 | Provider | Get a free key |
 |---|---|
 | NVIDIA NIM (recommended) | [build.nvidia.com](https://build.nvidia.com/) |
 | Groq | [console.groq.com/keys](https://console.groq.com/keys) |
 | Mistral | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) |
-| Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Gemini (optional, may need a paid plan) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| Cerebras (optional, needs a payment method) | [cloud.cerebras.ai](https://cloud.cerebras.ai/) |
 
 **3. Register it as an MCP server** with Claude Code (project or user scope):
 
 ```bash
-claude mcp add --transport stdio nvidia-nim -- uv run --project /path/to/this/repo nvidia_image.py
+claude mcp add --transport stdio nvidia-nim -- uv run --directory /path/to/this/repo nvidia_image.py
 ```
+
+`--directory` matters: with `--project` instead, `uv` still looks for `nvidia_image.py` in whatever directory the MCP client starts it from and fails with `Failed to spawn: nvidia_image.py`. With `--directory`, the server's working directory is the repository, so `.env` is found there and generated files land in the repository's `output/`.
 
 That's it — `nvidia-nim`'s seven tools are now available to Claude Code in any session where the server is registered.
 
@@ -152,6 +170,16 @@ from**, not inside the installed package. Override with
 
 `generate_image` and `create_embedding` write to that directory (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Timestamps carry **microsecond** precision, so two calls landing in the same wall-clock second get two files instead of one overwriting the other. Every other tool returns its result directly as text, with the model that answered noted at the end.
 
+## 🔐 What leaves your machine
+
+- **Your prompts and text** go to whichever provider answers: NVIDIA, then Groq, Mistral, Gemini or Cerebras if you configured them.
+- **`generate_image`'s Pollinations tier** is keyless and puts the prompt in the URL of a plain `GET` to `image.pollinations.ai`. Treat anything you send there as public. The prompt is escaped as a single path segment, and the download is capped at 20 MB and must really be an image before it is saved.
+- **`describe_image` uploads the image** (base64) to NVIDIA or a vision fallback. Before anything is sent, the file must have a `.jpg`/`.jpeg`/`.png`/`.webp` extension, its first bytes must be a JPEG, PNG or WebP signature, and it must be at most 10 MB. That cap is enforced on the read itself. A renamed document or key file is refused locally.
+- **Each API key goes only to its own provider.** Keys are scrubbed from any error text a tool returns and from the server's log.
+- **No tool takes a URL.** The server only talks to the fixed hosts above, so there is no way to point it at an arbitrary address.
+
+**How failures come back.** When a tool cannot do its job, it returns an ordinary text result that says which models failed and which key would help. It does not return an MCP error result (`isError`). Arguments that break a tool's input schema are the exception: a `generate_image` width above 2048, for example, comes back as an MCP error before the tool runs.
+
 ## 🛠 Development
 
 ```bash
@@ -170,11 +198,14 @@ The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and
 
 - **fallback-chain ordering** per tool, and the cross-provider gating logic (`tests/test_fallback.py`, `tests/test_build_chat_chain.py`);
 - **what each tool does with no `NVIDIA_API_KEY`** — that the keyless tiers are actually reached, and that the tools without one name every key that would work (`tests/test_api_key_guard.py`);
-- **the upload guards** on `describe_image` and the bounded, content-verified Pollinations download (`tests/test_generate_image.py`, `tests/test_describe_image_fallback.py`);
+- **the upload guards** on `describe_image` — extension allowlist, 10 MB cap enforced on the read itself, and a file-signature check so a renamed non-image is never uploaded — and the bounded, content-verified Pollinations download (`tests/test_generate_image.py`, `tests/test_describe_image_fallback.py`, `tests/test_robustness.py`);
+- **failures that must fall through, not crash** — connection errors, a non-JSON or malformed `200`, and retired models (`HTTP 410`, labelled *retired* by the health check) each move on to the next tier (`tests/test_robustness.py`);
+- **metadata consistency** — every model in the code is named in this README and probed by `check_provider_health`, and `server.json` fits the MCP Registry schema's limits and matches `pyproject.toml` (`tests/test_metadata.py`);
+- **provider isolation** — each chain entry is its own call with its own key, so a Groq or Mistral key is never sent to NVIDIA's endpoint; one attempt per entry; an empty reply moves on; no key ever reaches the log; the Pollinations prompt stays one URL path segment (`tests/test_chain_isolation.py`);
 - **output-filename collisions** — two calls in the same wall-clock second must not overwrite each other — and that a provider's error body is returned with the API key scrubbed out;
 - **`check_provider_health`'s per-model OK/FAIL reporting**, including that one dead model never hides the others' status.
 
-CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push/PR.
+CI (`.github/workflows/ci.yml`) runs `uv sync --locked` and `uv run pytest` on Python 3.11 and 3.14, builds and installs the wheel, and audits the server with mcp-vet, on every push/PR.
 
 ## What this server can actually do
 
@@ -198,9 +229,9 @@ runs stays right by default.
 nvidia-nim-mcp/
 ├── nvidia_image.py     # the MCP server — all 7 tools live here
 ├── tests/               # pytest suite, fully mocked, no API key needed
-├── pyproject.toml      # uv project + dependencies (httpx, litellm, mcp)
+├── pyproject.toml      # uv project + dependencies (httpx2, litellm, mcp, python-dotenv)
 ├── .env.example        # copy to .env and fill in your keys
-├── .github/workflows/  # CI: uv sync --group dev && uv run pytest
+├── .github/workflows/  # CI (tests, packaging, mcp-vet) and the PyPI/MCP Registry release
 ├── output/             # generated images + embeddings land here
 └── assets/             # banner, fallback diagram, tool grid (this README's visuals)
 ```

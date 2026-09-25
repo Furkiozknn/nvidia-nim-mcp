@@ -14,6 +14,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # olculen en uzun kosu 19 sn
     strategy:
       fail-fast: false
       matrix:
@@ -26,12 +27,15 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
         with:
           enable-cache: true
 
+      # --locked: fail if uv.lock is out of date with pyproject.toml instead
+      # of silently re-resolving. It had drifted (the lock still named the
+      # project "nvidia-nim"), which plain `uv sync` hid.
       - name: Install dependencies
-        run: uv sync --python ${{ matrix.python-version }}
+        run: uv sync --locked --python ${{ matrix.python-version }}
 
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest
@@ -42,11 +46,12 @@ jobs:
   # hicbir sey paketlemeyi denemiyordu. Bu is onu her push'a tasiyor.
   paket:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # olculen en uzun kosu 19 sn
     steps:
       - uses: actions/checkout@v4
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
 
       - name: Paket derleniyor mu
         run: uv build
@@ -71,9 +76,10 @@ jobs:
   denetim:
     name: mcp-vet (kendi sunucumuza kendi aracimiz)
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # olculen en uzun kosu 9 sn
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
 
       # Ayni hesaptaki mcp-vet: bir MCP sunucusunun ne yapabildigini
       # kaynaktan cikariyor -- hangi kimlik bilgilerine dokunuyor, nereye
@@ -81,8 +87,19 @@ jobs:
       # denetlemek, aracin da sunucunun da yanlis bulgusunu ortaya cikariyor:
       # bu is eklenirken mcp-vet'te gercek bir yanlis pozitif bulundu ve
       # duzeltildi (savunma amacli bir denylist, kimlik okumak sanilmisti).
+      # Bilerek master izleniyor: aracin duzeltmeleri (yeni algilamalar, giderilen
+      # yanlis pozitifler) bu kapiya bekletmeden yansisin. Ama `mcp-vet`in
+      # `--version`u yok; hangi surumun karar verdigi kayda gecmezse kirmizi ya
+      # da yesil bir kosu sonradan yeniden uretilemez. O yuzden master once tek
+      # bir commit'e cozuluyor, tam o commit kuruluyor ve ozete yaziliyor.
       - name: mcp-vet'i kur
-        run: uv tool install git+https://github.com/Furkiozknn/mcp-vet
+        run: |
+          set -euo pipefail
+          rev="$(git ls-remote https://github.com/Furkiozknn/mcp-vet refs/heads/master | cut -f1)"
+          test -n "$rev" || { echo "mcp-vet master cozulemedi"; exit 1; }
+          echo "MCPVET_REV=$rev" >> "$GITHUB_ENV"
+          uv tool install "git+https://github.com/Furkiozknn/mcp-vet@$rev"
+          echo "mcp-vet $rev kuruldu"
 
       # --offline: ag yok, yalnizca kaynak analizi. Depo zaten burada.
       - name: Denetle
@@ -98,6 +115,8 @@ jobs:
           cat /tmp/mcpvet.txt
           {
             echo '### mcp-vet'
+            echo ''
+            echo "Surum: Furkiozknn/mcp-vet@${MCPVET_REV}"
             echo ''
             echo '```'
             cat /tmp/mcpvet.txt

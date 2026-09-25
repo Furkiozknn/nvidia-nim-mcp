@@ -61,9 +61,9 @@
   <path d="M515,172 L515,196 L330,196 L330,214" fill="none" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
   <path d="M515,172 L515,196 L990,196 L990,214" fill="none" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
 
-  <!-- ===== LANE A (NVIDIA-only tools) ===== -->
+  <!-- ===== LANE A (tools with their own fallback tier) ===== -->
   <rect x="110" y="216" width="440" height="34" rx="8" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.4" opacity="0.9"/>
-  <text x="330" y="238" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="12" fill="#cfe8b0">generate_image · describe_image · check_content_safety · create_embedding</text>
+  <text x="330" y="238" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="10.5" fill="#cfe8b0">generate_image · describe_image · check_content_safety · create_embedding</text>
 
   <line x1="330" y1="250" x2="330" y2="270" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
 
@@ -74,11 +74,23 @@
   <text x="330" y="320" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">1–2 models, tried in order (see Tools table)</text>
   <text x="330" y="340" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">e.g. flux.1-dev → flux.2-klein-4b</text>
 
-  <line x1="330" y1="358" x2="330" y2="382" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+  <line x1="330" y1="358" x2="330" y2="376" stroke="#a6ff4d" stroke-width="2.4" stroke-dasharray="6,5" marker-end="url(#arrow2)"/>
+  <text x="415" y="371" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="11" fill="#c8ff8a" opacity="0.9">if every NVIDIA model fails</text>
 
-  <rect x="110" y="384" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
-  <text x="330" y="408" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">success at any model → result returned</text>
-  <text x="330" y="430" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ all fail → explicit error text, no other provider tried</text>
+  <g filter="url(#softGlow2)">
+    <rect x="110" y="382" width="440" height="98" rx="12" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.6"/>
+  </g>
+  <text x="330" y="402" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="12.5" font-weight="700" fill="#eafce0">each tool's own fallback tier</text>
+  <text x="130" y="422" font-family="Segoe UI, sans-serif" font-size="11" fill="#a9d98a">generate_image → Pollinations.ai (keyless)</text>
+  <text x="130" y="438" font-family="Segoe UI, sans-serif" font-size="11" fill="#a9d98a">describe_image → Groq / Mistral / Gemini vision models</text>
+  <text x="130" y="454" font-family="Segoe UI, sans-serif" font-size="11" fill="#a9d98a">check_content_safety → labelled verdict from a chat model</text>
+  <text x="130" y="470" font-family="Segoe UI, sans-serif" font-size="11" fill="#a9d98a">create_embedding → local model (opt-in extra, keyless)</text>
+
+  <line x1="330" y1="480" x2="330" y2="502" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
+
+  <rect x="110" y="504" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
+  <text x="330" y="528" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">success at any step → result returned</text>
+  <text x="330" y="550" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ everything fails → explicit error text</text>
 
   <!-- ===== LANE B (cross-provider tools) — the star lane ===== -->
   <rect x="750" y="216" width="440" height="34" rx="8" fill="#0f1a08" stroke="#a6ff4d" stroke-width="1.8" filter="url(#softGlow2)"/>
@@ -141,7 +153,7 @@
 
   <!-- footer note -->
   <line x1="60" y1="604" x2="1260" y2="604" stroke="#3f5a26" stroke-width="1"/>
-  <text x="660" y="630" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#cfe8b0" opacity="0.85">Either way, Claude Code always gets back a plain string — either the result, or a clear failure message. Nothing ever throws.</text>
+  <text x="660" y="630" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12.5" fill="#cfe8b0" opacity="0.85">Either way, Claude Code gets back text: the result, or a message saying what failed and which key would help.</text>
 
   <!-- legend -->
   <g font-family="Segoe UI, sans-serif" font-size="11.5" fill="#a9d98a">
