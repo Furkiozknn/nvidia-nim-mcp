@@ -77,7 +77,7 @@
   <line x1="330" y1="358" x2="330" y2="382" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
 
   <rect x="110" y="384" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
-  <text x="330" y="408" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">✓ success at any model → result returned</text>
+  <text x="330" y="408" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">success at any model → result returned</text>
   <text x="330" y="430" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ all fail → explicit error text, no other provider tried</text>
 
   <!-- ===== LANE B (cross-provider tools) — the star lane ===== -->
@@ -102,7 +102,7 @@
   </g>
   <text x="809" y="405" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Groq</text>
   <text x="809" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">gpt-oss-120b</text>
-  <text x="809" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 GROQ_API_KEY</text>
+  <text x="809" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">GROQ_API_KEY</text>
 
   <line x1="863" y1="420" x2="887" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
 
@@ -111,7 +111,7 @@
   </g>
   <text x="943" y="405" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Mistral</text>
   <text x="943" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">mistral-small</text>
-  <text x="943" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 MISTRAL_API_KEY</text>
+  <text x="943" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">MISTRAL_API_KEY</text>
 
   <line x1="997" y1="420" x2="1021" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
 
@@ -120,7 +120,7 @@
   </g>
   <text x="1077" y="405" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Gemini</text>
   <text x="1077" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">flash-latest</text>
-  <text x="1077" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 GEMINI_API_KEY</text>
+  <text x="1077" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">GEMINI_API_KEY</text>
 
   <line x1="1131" y1="420" x2="1155" y2="420" stroke="#76b900" stroke-width="2" marker-end="url(#arrow2)"/>
 
@@ -129,14 +129,14 @@
   </g>
   <text x="1211" y="405" text-anchor="middle" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="13" font-weight="700" fill="#eafce0">Cerebras</text>
   <text x="1211" y="421" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9.5" fill="#a9d98a">gpt-oss-120b</text>
-  <text x="1211" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">🔑 CEREBRAS_API_KEY</text>
+  <text x="1211" y="445" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="9" fill="#8fae70">CEREBRAS_API_KEY</text>
 
   <text x="970" y="472" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="10.5" fill="#7fae4c" opacity="0.85">each provider is tried only if its key is set — unset keys are skipped silently, no code changes needed</text>
 
   <line x1="970" y1="480" x2="970" y2="502" stroke="#76b900" stroke-width="2.2" marker-end="url(#arrow2)"/>
 
   <rect x="750" y="504" width="440" height="72" rx="12" fill="#0f1a08" stroke="#5c7a3a" stroke-width="1.6" opacity="0.95"/>
-  <text x="970" y="528" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">✓ success at any step → result returned</text>
+  <text x="970" y="528" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="13" fill="#c8ff8a">success at any step → result returned</text>
   <text x="970" y="550" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" fill="#9fb98a">⊘ everything fails → explicit error text</text>
 
   <!-- footer note -->
@@ -151,7 +151,7 @@
     <line x1="420" y1="672" x2="460" y2="672" stroke="#a6ff4d" stroke-width="2.2" stroke-dasharray="6,5" marker-end="url(#arrow2)"/>
     <text x="470" y="676">only attempted if everything above failed</text>
 
-    <text x="820" y="676">🔑 gated by an .env key — skipped silently if unset</text>
+    <text x="820" y="676">gated by an .env key — skipped silently if unset</text>
   </g>
 
   <text x="1260" y="770" text-anchor="end" font-family="'JetBrains Mono Embedded','Cascadia Code','Consolas',monospace" font-size="11" fill="#7fae4c" opacity="0.45">nvidia_image.py</text>

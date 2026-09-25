@@ -165,3 +165,76 @@ def test_sniff_image_format_recognizes_the_four_formats_and_rejects_html():
     assert nvidia_image._sniff_image_format(b"GIF89a...") == "gif"
     assert nvidia_image._sniff_image_format(b"<html></html>") is None
     assert nvidia_image._sniff_image_format(b"") is None
+
+
+# --- output filenames and error redaction --------------------------------
+
+
+def test_stamp_has_microsecond_precision():
+    """Second precision let two calls in the same wall-clock second write to
+    the same filename and silently overwrite each other."""
+    stamp = nvidia_image._stamp()
+    date_part, time_part, micro_part = stamp.split("_")
+    assert len(date_part) == 8
+    assert len(time_part) == 6
+    assert len(micro_part) == 6
+
+
+@pytest.mark.asyncio
+async def test_rapid_nvidia_calls_do_not_collide_on_the_same_filename(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(200, json_data={"artifacts": [{"base64": "aGVsbG8="}]})
+    )
+
+    first = await nvidia_image.generate_image(prompt="a cat")
+    second = await nvidia_image.generate_image(prompt="a dog")
+
+    assert first != second
+    assert len(list(tmp_path.glob("flux.1-dev_*.jpg"))) == 2
+
+
+@pytest.mark.asyncio
+async def test_rapid_pollinations_calls_do_not_collide_on_the_same_filename(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(503, text="overloaded"),
+        get_side_effect=lambda *a, **kw: FakeResponse(200, content=b"\xff\xd8\xfffake-jpeg-bytes"),
+    )
+
+    await nvidia_image.generate_image(prompt="a cat")
+    await nvidia_image.generate_image(prompt="a dog")
+
+    assert len(list(tmp_path.glob("pollinations_*.jpg"))) == 2
+
+
+def test_redact_replaces_the_secret_and_is_a_noop_otherwise():
+    assert nvidia_image._redact("bad key nvapi-abc123", "nvapi-abc123") == "bad key ***"
+    assert nvidia_image._redact("some error", None) == "some error"
+    assert nvidia_image._redact("some error", "") == "some error"
+    assert nvidia_image._redact("some error", "unrelated") == "some error"
+
+
+@pytest.mark.asyncio
+async def test_provider_error_body_is_returned_with_the_api_key_scrubbed(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    """A provider error body is attacker-influenced text this tool hands
+    straight back to the caller - a 401 echoing the offending Authorization
+    header must not carry the key out with it."""
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(
+        post_side_effect=lambda *a, **kw: FakeResponse(
+            401, text=f"invalid credentials: Bearer {nvidia_key}"
+        ),
+        get_side_effect=RuntimeError("pollinations down"),
+    )
+
+    result = await nvidia_image.generate_image(prompt="a cat")
+
+    assert nvidia_key not in result
+    assert "***" in result

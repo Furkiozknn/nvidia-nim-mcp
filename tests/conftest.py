@@ -36,22 +36,22 @@ typing._eval_type = _eval_type_compat
 # -------------------------------------------------------------------------
 
 
+# The key and the request headers are read from the environment per request
+# (nvidia_image._api_key / _headers), so both fixtures below just set or
+# clear the environment variable - there is no module-level snapshot left to
+# patch, which is the point: a snapshot ignored key rotation entirely.
+
 @pytest.fixture
 def nvidia_key(monkeypatch):
     """Make the module believe NVIDIA_API_KEY is set, without touching .env."""
-    import nvidia_image
-
-    monkeypatch.setattr(nvidia_image, "API_KEY", "test-nvidia-key")
-    monkeypatch.setitem(nvidia_image.HEADERS, "Authorization", "Bearer test-nvidia-key")
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-nvidia-key")
     return "test-nvidia-key"
 
 
 @pytest.fixture
 def no_nvidia_key(monkeypatch):
     """Make the module believe NVIDIA_API_KEY is NOT set."""
-    import nvidia_image
-
-    monkeypatch.setattr(nvidia_image, "API_KEY", None)
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     return None
 
 
