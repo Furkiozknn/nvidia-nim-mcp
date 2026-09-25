@@ -80,6 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
+
+      # Ayni hesaptaki mcp-vet: bir MCP sunucusunun ne yapabildigini
       # kaynaktan cikariyor -- hangi kimlik bilgilerine dokunuyor, nereye
       # baglaniyor, ne calistiriyor. Kendi sunucumuzu kendi aracimizla
       # denetlemek, aracin da sunucunun da yanlis bulgusunu ortaya cikariyor:
