@@ -12,7 +12,8 @@
 #     Workflow name:    yayinla.yml
 #     Environment name: pypi
 #
-# Sonrasinda yayin: `git tag v0.5.0 && git push origin v0.5.0`
+# Sonrasinda yayin (etiket pyproject surumuyla ayni olmali, orn. 0.1.0 -> v0.1.0):
+#   git tag -a v0.1.0 <sha> -m "v0.1.0" && git push origin v0.1.0
 #
 # Kayit tamamlanmadan once: Actions -> Yayinla -> Run workflow (kutuyu
 # isaretleme). `paketle` isi kosar, `uv build` + `twine check` gecerse

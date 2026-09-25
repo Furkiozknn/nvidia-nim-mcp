@@ -17,6 +17,20 @@ The idea is simple: **a model being slow, rate-limited, or quietly retired shoul
 
 Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build.nvidia.com/) — or none at all for the two keyless tools. (Cerebras is the one optional provider that needs a payment method; see [the fallback chain](#-the-fallback-chain).)
 
+## Quick start
+
+Needs [`uv`](https://docs.astral.sh/uv/) and Claude Code.
+
+```bash
+git clone https://github.com/Furkiozknn/nvidia-nim-mcp
+cd nvidia-nim-mcp
+uv sync
+cp .env.example .env    # optional: fill in NVIDIA_API_KEY and any free-tier keys
+claude mcp add --transport stdio nvidia-nim -- uv run --directory "$PWD" nvidia_image.py
+```
+
+Then ask Claude Code *"generate an image of a red bicycle"*. That works with no key at all: without `NVIDIA_API_KEY` it goes straight to the keyless Pollinations tier and saves the file under `output/` in the repository. *"Which of the nvidia-nim providers are alive right now?"* runs `check_provider_health` and shows which of your keys actually work.
+
 ## Table of Contents
 
 - [Tools](#-tools)
@@ -24,6 +38,7 @@ Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build
 - [Setup](#-setup)
 - [Example usage](#-example-usage)
 - [Output files](#-output-files)
+- [What leaves your machine](#-what-leaves-your-machine)
 - [Development](#-development)
 - [Testing](#-testing)
 - [Project layout](#-project-layout)
@@ -86,7 +101,7 @@ uv sync
 
 ```bash
 # Recommended — unlocks the highest-quality tier of every tool.
-NVIDIA_API_KEY=your-key-here
+NVIDIA_API_KEY=
 
 # Optional — extend the fallback chain. Each is skipped silently if unset.
 GROQ_API_KEY=
@@ -97,7 +112,7 @@ CEREBRAS_API_KEY=
 
 `NVIDIA_API_KEY` is strongly **recommended** rather than strictly required: it unlocks the highest-quality tier of every tool, and gets you one for free at [build.nvidia.com](https://build.nvidia.com/) with no credit card. Without it, `generate_image` and `create_embedding` still work on their keyless tiers, and the other four work off any one free-tier key — see the tools table. The extras widen the fallback chain for `translate_text`, `ask_llm`, `check_content_safety` and `describe_image`.
 
-The key is read from the environment **per request**, not once at startup, so rotating it (or writing `.env` after the server is already running) takes effect on the next call — no restart.
+`.env` is read **once, when the server starts**, from the directory that holds `nvidia_image.py`. After you add or change a key, restart the server: in Claude Code, run `/mcp` and reconnect `nvidia-nim`. You can also pass keys through the MCP client's own environment instead of `.env`, for example `claude mcp add ... -e GROQ_API_KEY=...`. Keys already in the environment take precedence over `.env`.
 
 | Provider | Get a free key |
 |---|---|
@@ -155,6 +170,16 @@ from**, not inside the installed package. Override with
 
 `generate_image` and `create_embedding` write to that directory (created automatically) — images as timestamped `.jpg` files named after the model that produced them, embeddings as timestamped `.json` files containing the source text, model, and vector. Timestamps carry **microsecond** precision, so two calls landing in the same wall-clock second get two files instead of one overwriting the other. Every other tool returns its result directly as text, with the model that answered noted at the end.
 
+## 🔐 What leaves your machine
+
+- **Your prompts and text** go to whichever provider answers: NVIDIA, then Groq, Mistral, Gemini or Cerebras if you configured them.
+- **`generate_image`'s Pollinations tier** is keyless and puts the prompt in the URL of a plain `GET` to `image.pollinations.ai`. Treat anything you send there as public. The prompt is escaped as a single path segment, and the download is capped at 20 MB and must really be an image before it is saved.
+- **`describe_image` uploads the image** (base64) to NVIDIA or a vision fallback. Before anything is sent, the file must have a `.jpg`/`.jpeg`/`.png`/`.webp` extension, its first bytes must be a JPEG, PNG or WebP signature, and it must be at most 10 MB. That cap is enforced on the read itself. A renamed document or key file is refused locally.
+- **Each API key goes only to its own provider.** Keys are scrubbed from any error text a tool returns and from the server's log.
+- **No tool takes a URL.** The server only talks to the fixed hosts above, so there is no way to point it at an arbitrary address.
+
+**How failures come back.** When a tool cannot do its job, it returns an ordinary text result that says which models failed and which key would help. It does not return an MCP error result (`isError`). Arguments that break a tool's input schema are the exception: a `generate_image` width above 2048, for example, comes back as an MCP error before the tool runs.
+
 ## 🛠 Development
 
 ```bash
@@ -176,6 +201,7 @@ The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and
 - **the upload guards** on `describe_image` — extension allowlist, 10 MB cap enforced on the read itself, and a file-signature check so a renamed non-image is never uploaded — and the bounded, content-verified Pollinations download (`tests/test_generate_image.py`, `tests/test_describe_image_fallback.py`, `tests/test_robustness.py`);
 - **failures that must fall through, not crash** — connection errors, a non-JSON or malformed `200`, and retired models (`HTTP 410`, labelled *retired* by the health check) each move on to the next tier (`tests/test_robustness.py`);
 - **metadata consistency** — every model in the code is named in this README and probed by `check_provider_health`, and `server.json` fits the MCP Registry schema's limits and matches `pyproject.toml` (`tests/test_metadata.py`);
+- **provider isolation** — each chain entry is its own call with its own key, so a Groq or Mistral key is never sent to NVIDIA's endpoint; one attempt per entry; an empty reply moves on; no key ever reaches the log; the Pollinations prompt stays one URL path segment (`tests/test_chain_isolation.py`);
 - **output-filename collisions** — two calls in the same wall-clock second must not overwrite each other — and that a provider's error body is returned with the API key scrubbed out;
 - **`check_provider_health`'s per-model OK/FAIL reporting**, including that one dead model never hides the others' status.
 
