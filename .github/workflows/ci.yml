@@ -87,9 +87,15 @@ jobs:
       # --offline: ag yok, yalnizca kaynak analizi. Depo zaten burada.
       - name: Denetle
         run: |
+          # Actions bu kabugu `-e` ile calistiriyor. `... | tee` boru hatti
+          # LOW bulguda 1 donuyor ve `-e` betigi tam orada olduruyor -- yani
+          # asagidaki `case` hic kosmuyordu ve LOW bir sunucu kirmizi yaniyordu.
+          # Cikis kodu `|| kod=$?` ile aliniyor, cunku `||` olan bir komut
+          # `-e` icin sinanmis sayiliyor.
           set -uo pipefail
-          mcp-vet audit --offline --path . | tee /tmp/mcpvet.txt
-          kod=${PIPESTATUS[0]}
+          kod=0
+          mcp-vet audit --offline --path . > /tmp/mcpvet.txt 2>&1 || kod=$?
+          cat /tmp/mcpvet.txt
           {
             echo '### mcp-vet'
             echo ''
