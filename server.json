@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Furkiozknn/nvidia-nim-mcp",
+  "title": "NVIDIA NIM",
+  "description": "Seven MCP tools on NVIDIA NIM's free tier - image, vision, translation, chat, content safety, embeddings and reranking - two of which need no API key at all.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/Furkiozknn/nvidia-nim-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "nvidia-nim-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

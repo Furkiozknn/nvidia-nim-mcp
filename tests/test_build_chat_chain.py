@@ -1,5 +1,6 @@
-"""_build_chat_chain: NVIDIA models first, extra providers only when their
-API key is actually set in the environment."""
+"""_build_chat_chain: NVIDIA models first (only when NVIDIA_API_KEY is set),
+extra providers only when their own API key is actually set in the
+environment."""
 import nvidia_image
 
 
@@ -8,7 +9,7 @@ def _clear_all_provider_keys(monkeypatch):
         monkeypatch.delenv(provider["env"], raising=False)
 
 
-def test_nvidia_models_come_first_in_declared_order(monkeypatch):
+def test_nvidia_models_come_first_in_declared_order(nvidia_key, monkeypatch):
     _clear_all_provider_keys(monkeypatch)
 
     chain = nvidia_image._build_chat_chain(["nvidia/model-a", "nvidia/model-b"])
@@ -18,10 +19,28 @@ def test_nvidia_models_come_first_in_declared_order(monkeypatch):
     assert chain[1]["model"] == "openai/nvidia/model-b"
     for entry in chain:
         assert entry["api_base"] == "https://integrate.api.nvidia.com/v1"
-        assert entry["api_key"] == nvidia_image.API_KEY
+        assert entry["api_key"] == nvidia_key
 
 
-def test_no_extra_providers_when_no_keys_set(monkeypatch):
+def test_nvidia_models_are_omitted_without_a_nvidia_key(no_nvidia_key, monkeypatch):
+    """The headline fix: with no NVIDIA key the chain must start at the free
+    tier, not be dead. An entry carrying api_key=None would send
+    "Bearer None" and 401 for every model before any fallback was reached."""
+    _clear_all_provider_keys(monkeypatch)
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+
+    chain = nvidia_image._build_chat_chain(["nvidia/model-a", "nvidia/model-b"])
+
+    assert [entry["model"] for entry in chain] == ["groq/openai/gpt-oss-120b"]
+
+
+def test_chain_is_empty_when_nothing_at_all_is_configured(no_nvidia_key, monkeypatch):
+    _clear_all_provider_keys(monkeypatch)
+
+    assert nvidia_image._build_chat_chain(["nvidia/model-a"]) == []
+
+
+def test_no_extra_providers_when_no_keys_set(nvidia_key, monkeypatch):
     _clear_all_provider_keys(monkeypatch)
 
     chain = nvidia_image._build_chat_chain(["nvidia/model-a"])
@@ -30,7 +49,7 @@ def test_no_extra_providers_when_no_keys_set(monkeypatch):
     assert chain[0]["model"] == "openai/nvidia/model-a"
 
 
-def test_only_configured_providers_are_appended(monkeypatch):
+def test_only_configured_providers_are_appended(nvidia_key, monkeypatch):
     _clear_all_provider_keys(monkeypatch)
     monkeypatch.setenv("GROQ_API_KEY", "groq-key")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
@@ -44,7 +63,7 @@ def test_only_configured_providers_are_appended(monkeypatch):
     assert "cerebras/gpt-oss-120b" not in models_after_nvidia
 
 
-def test_extra_providers_preserve_declared_order(monkeypatch):
+def test_extra_providers_preserve_declared_order(nvidia_key, monkeypatch):
     _clear_all_provider_keys(monkeypatch)
     # Set every key; the chain order should follow EXTRA_PROVIDERS, not
     # environment insertion order.
@@ -64,7 +83,7 @@ def test_extra_providers_preserve_declared_order(monkeypatch):
     ]
 
 
-def test_each_extra_provider_carries_its_own_key(monkeypatch):
+def test_each_extra_provider_carries_its_own_key(nvidia_key, monkeypatch):
     _clear_all_provider_keys(monkeypatch)
     monkeypatch.setenv("GROQ_API_KEY", "the-groq-key")
 
