@@ -7,11 +7,13 @@ import threading
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from typing import Annotated
 
 import httpx2
 import litellm
 from dotenv import load_dotenv
 from mcp.server import MCPServer
+from pydantic import Field
 
 load_dotenv()
 
@@ -74,15 +76,35 @@ def _redact(text: str, secret: str | None) -> str:
     return text.replace(secret, "***")
 
 
-def _read_image_b64(path: Path) -> str:
-    """Read an image file and base64-encode it. Blocking disk I/O - always
-    called through asyncio.to_thread, never inline in an async def."""
-    return base64.b64encode(path.read_bytes()).decode()
+def _read_image_bytes(path: Path) -> bytes | None:
+    """Read at most DESCRIBE_IMAGE_MAX_BYTES of an image file, or None if it
+    is larger. The size is enforced on the read itself, not only on an
+    earlier stat(): a file that grows between the check and the read must
+    not turn into an unbounded upload. Blocking disk I/O - always called
+    through asyncio.to_thread, never inline in an async def."""
+    with path.open("rb") as f:
+        data = f.read(DESCRIBE_IMAGE_MAX_BYTES + 1)
+    return None if len(data) > DESCRIBE_IMAGE_MAX_BYTES else data
+
+
+def _http_failure(status_code: int) -> str:
+    """Short failure detail for a non-200 NVIDIA response. HTTP 410 is how
+    NVIDIA reports a model that has reached end of life - that one needs a
+    code change (remove or replace the model), not a retry, so say so."""
+    if status_code == 410:
+        return "HTTP 410 - model retired by the provider; remove or replace it"
+    return f"HTTP {status_code}"
 
 # Every model below was confirmed working with a real request (2026-08-22)
-# before being wired in - see new-mcp-server skill for why that matters.
-# Each capability has 2+ models so one being rate-limited/slow/congested
-# doesn't take the tool down; the caller never needs to know which one answered.
+# before being wired in. Each capability has 2+ models so one being
+# rate-limited/slow/congested doesn't take the tool down; the caller never
+# needs to know which one answered.
+
+# Bounds on generate_image's width/height, enforced by the tool's input
+# schema. A request far outside them is never a real image size, and the
+# keyless Pollinations tier would otherwise be asked for it verbatim.
+IMAGE_MIN_SIDE = 64
+IMAGE_MAX_SIDE = 2048
 
 IMAGE_MODELS = [
     {"slug": "black-forest-labs/flux.1-dev", "cfg_scale": 3.5, "steps": 25},
@@ -110,6 +132,7 @@ POLLINATIONS_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 # exfiltrating whatever happens to be at the path. Same reasoning and shape
 # as voice-io-mcp's speech_to_text limits.
 DESCRIBE_IMAGE_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+DESCRIBE_IMAGE_ALLOWED_FORMATS = {"jpeg", "png", "webp"}
 DESCRIBE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 # Passed to every litellm chain call. litellm's own default is 600 seconds -
@@ -127,35 +150,30 @@ TRANSLATE_MODELS = [
 LLM_MODELS = [
     # glm-5.2 and deepseek-v4-flash were removed 2026-08-22 - both confirmed
     # permanently retired on NVIDIA's platform (HTTP 410, "reached its end
-    # of life"), not just rate-limited. Verified via litellm before removing -
-    # see systematic-debugging skill for why that check matters here.
+    # of life"), not just rate-limited. check_provider_health labels a 410
+    # as "retired" so the next one is easy to spot.
     "nvidia/llama-3.3-nemotron-super-49b-v1.5",
     "openai/gpt-oss-120b",
 ]
 
-# Free-tier providers beyond NVIDIA (added 2026-08-22). Each is skipped
-# automatically if its API key isn't set in .env yet - paste a key in and it
-# joins the fallback chain on the next call, no code changes needed. Picked
-# because each has a genuinely permanent free tier, no credit card:
-# Gemini (aistudio.google.com/apikey), Groq (console.groq.com/keys),
-# Mistral (console.mistral.ai/api-keys). OpenAI has no ongoing free tier as
-# of 2026 (only an expiring trial credit) so it's deliberately not here.
+# Providers beyond NVIDIA (added 2026-08-22). Each is skipped automatically
+# if its API key isn't set - set a key and it joins the fallback chain on the
+# next call, no code changes needed. OpenAI has no ongoing free tier as of
+# 2026 (only an expiring trial credit) so it's deliberately not here.
 EXTRA_PROVIDERS = [
-    # Ordered by what was actually confirmed working with a real call on
-    # 2026-08-22 - model names drift fast, always verify against the
-    # provider's live /models endpoint before trusting a name from memory.
-    {"env": "GROQ_API_KEY", "model": "groq/openai/gpt-oss-120b"},  # confirmed working
-    {"env": "MISTRAL_API_KEY", "model": "mistral/mistral-small-latest"},  # confirmed working
-    # Blocked: Google wants a paid plan upgrade on this project to lift the
-    # PERMISSION_DENIED. Not a code bug - user deliberately declined the
-    # upgrade (2026-08-22), fine with Groq+Mistral as the free backup for now.
-    # Left in harmlessly (litellm just skips a failing entry and moves on);
-    # revisit only if the user brings it up again.
+    # Ordered by what was confirmed working with a real call on 2026-08-22.
+    # Model names drift fast; verify against the provider's live /models
+    # endpoint before changing one.
+    {"env": "GROQ_API_KEY", "model": "groq/openai/gpt-oss-120b"},  # free tier, confirmed working
+    {"env": "MISTRAL_API_KEY", "model": "mistral/mistral-small-latest"},  # free tier, confirmed working
+    # Optional, not verified end to end: on the Google Cloud project used for
+    # testing, the Gemini API answered PERMISSION_DENIED until the project is
+    # moved to a paid plan. Keys from other projects may work. A failing
+    # entry costs one failed call; litellm then moves to the next.
     {"env": "GEMINI_API_KEY", "model": "gemini/gemini-flash-latest"},
-    # Cerebras now requires billing ("Payment required") - not actually a
-    # free tier despite earlier research suggesting otherwise. Kept last as
-    # a deliberate last resort; remove entirely if the user doesn't want to
-    # add a payment method there.
+    # Optional, paid: Cerebras answers "Payment required" until a payment
+    # method is on the account, so it is not a free tier. Kept last so it is
+    # only reached when everything else has failed.
     {"env": "CEREBRAS_API_KEY", "model": "cerebras/gpt-oss-120b"},
 ]
 
@@ -293,13 +311,19 @@ async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], mes
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         try:
             resp = await client.post(CHAT_URL, headers=headers, json=body, timeout=18.0)
-        except httpx2.TimeoutException:
+        except httpx2.HTTPError as e:
+            # Timeouts and every other transport failure (connection refused,
+            # DNS, TLS, ...) move on to the next model. Catching only
+            # TimeoutException let a ConnectError escape the tool entirely,
+            # skipping the cross-provider fallback the caller still had.
+            logger.warning("%s: %s", model, _redact(str(e), _api_key()))
             continue
         if resp.status_code != 200:
             continue
         try:
             content = resp.json()["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, json.JSONDecodeError):
+        except (KeyError, IndexError, TypeError, ValueError):
+            # ValueError covers json.JSONDecodeError (a non-JSON 200 body).
             continue
         return content, model
     return None
@@ -334,7 +358,7 @@ async def _probe_nvidia_chat_model(client: httpx2.AsyncClient, model: str) -> tu
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_failure(resp.status_code)
     return True, "ok"
 
 
@@ -349,7 +373,7 @@ async def _probe_nvidia_image_model(client: httpx2.AsyncClient, slug: str) -> tu
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_failure(resp.status_code)
     return True, "ok"
 
 
@@ -363,7 +387,7 @@ async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> t
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_failure(resp.status_code)
     return True, "ok"
 
 
@@ -420,20 +444,24 @@ async def _generate_image_pollinations(client: httpx2.AsyncClient, prompt: str, 
 
 
 async def _probe_pollinations(client: httpx2.AsyncClient) -> tuple[bool, str]:
-    """Cheap liveness probe for the Pollinations.ai fallback: a tiny image request."""
+    """Cheap liveness probe for the Pollinations.ai fallback: a tiny image
+    request. Streamed and never read - only the status line matters, so a
+    misbehaving endpoint cannot make the probe buffer a large body."""
     try:
-        resp = await client.get(
+        async with client.stream(
+            "GET",
             f"{POLLINATIONS_BASE}/hi",
             params={"width": 8, "height": 8, "nologo": "true"},
             timeout=HEALTH_PROBE_TIMEOUT,
             follow_redirects=True,
-        )
+        ) as resp:
+            status_code = resp.status_code
     except httpx2.TimeoutException:
         return False, "timed out"
     except Exception as e:
         return False, f"error: {e}"
-    if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+    if status_code != 200:
+        return False, f"HTTP {status_code}"
     return True, "ok"
 
 
@@ -482,7 +510,16 @@ def _no_provider_message(action: str, providers: list[dict]) -> str:
 
 
 @mcp.tool()
-async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: int = 1024) -> str:
+async def generate_image(
+    prompt: Annotated[str, Field(description="Description of the image to generate.")],
+    seed: Annotated[int, Field(ge=0, description="Seed for reproducibility.")] = 0,
+    width: Annotated[
+        int, Field(ge=IMAGE_MIN_SIDE, le=IMAGE_MAX_SIDE, description="Image width in pixels.")
+    ] = 1024,
+    height: Annotated[
+        int, Field(ge=IMAGE_MIN_SIDE, le=IMAGE_MAX_SIDE, description="Image height in pixels.")
+    ] = 1024,
+) -> str:
     """Generate an image from a text prompt using NVIDIA NIM image models.
 
     Tries multiple models in order (flux.1-dev, then flux.2-klein-4b), then
@@ -520,21 +557,30 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                 except httpx2.TimeoutException:
                     errors.append(f"{model['slug']}: timed out")
                     continue
+                except httpx2.HTTPError as e:
+                    # Connection refused, DNS, TLS... - the next model or the
+                    # Pollinations tier may still answer, so record and move on.
+                    errors.append(f"{model['slug']}: {_redact(str(e), api_key)}")
+                    continue
                 if resp.status_code != 200:
                     errors.append(
-                        f"{model['slug']}: HTTP {resp.status_code} - {_redact(resp.text[:150], api_key)}"
+                        f"{model['slug']}: {_http_failure(resp.status_code)} - {_redact(resp.text[:150], api_key)}"
                     )
                     continue
-                data = resp.json()
-                artifacts = data.get("artifacts")
-                if not artifacts:
+                try:
+                    artifacts = resp.json().get("artifacts")
+                    image_bytes = base64.b64decode(artifacts[0]["base64"], validate=True) if artifacts else None
+                except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+                    # ValueError covers a non-JSON body and invalid base64.
+                    errors.append(f"{model['slug']}: malformed response")
+                    continue
+                if not image_bytes:
                     errors.append(f"{model['slug']}: no artifacts in response")
                     continue
-                img_b64 = artifacts[0]["base64"]
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 filepath = OUTPUT_DIR / f"{model['slug'].split('/')[-1]}_{_stamp()}.jpg"
                 # Blocking disk write - off the event loop, not inline here.
-                await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
+                await asyncio.to_thread(filepath.write_bytes, image_bytes)
                 return f"Image saved to {filepath} (model: {model['slug']})"
         else:
             errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set in .env")
@@ -553,11 +599,15 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
 
 
 @mcp.tool()
-async def translate_text(text: str, target_language: str) -> str:
+async def translate_text(
+    text: Annotated[str, Field(description="The text to translate.")],
+    target_language: Annotated[str, Field(description='Language to translate into, e.g. "Turkish", "Spanish".')],
+) -> str:
     """Translate text to a target language using NVIDIA NIM models.
 
     Tries a dedicated translation model first, falling back to general NVIDIA
-    chat models, then Gemini/Groq/Mistral if those API keys are configured.
+    chat models, then Groq/Mistral/Gemini/Cerebras if those API keys are
+    configured.
 
     Needs NVIDIA_API_KEY *or* any one free-tier key (GROQ/MISTRAL/GEMINI/
     CEREBRAS_API_KEY); without NVIDIA's, the chain simply starts at whichever
@@ -580,9 +630,12 @@ async def translate_text(text: str, target_language: str) -> str:
 
 
 @mcp.tool()
-async def ask_llm(question: str, system_prompt: str | None = None) -> str:
+async def ask_llm(
+    question: Annotated[str, Field(description="The question or task to send.")],
+    system_prompt: Annotated[str | None, Field(description="Optional system instruction.")] = None,
+) -> str:
     """Ask a question to an alternative LLM (not Claude) via NVIDIA NIM, with
-    automatic fallback to Gemini/Groq/Mistral if those API keys are set.
+    automatic fallback to Groq/Mistral/Gemini/Cerebras if those API keys are set.
 
     Useful for a second opinion, or when you specifically want a non-Anthropic
     model's answer. Tries several strong models/providers in order as fallback.
@@ -611,7 +664,12 @@ async def ask_llm(question: str, system_prompt: str | None = None) -> str:
 
 
 @mcp.tool()
-async def describe_image(image_path: str, question: str = "Describe this image in detail.") -> str:
+async def describe_image(
+    image_path: Annotated[
+        str, Field(description="Absolute path to a local JPEG, PNG or WebP image (at most 10 MB).")
+    ],
+    question: Annotated[str, Field(description="What to ask about the image.")] = "Describe this image in detail.",
+) -> str:
     """Analyze/describe a local image using an NVIDIA NIM vision-language model.
 
     Falls back to a free-tier vision-capable provider (Groq/Mistral/Gemini,
@@ -621,7 +679,8 @@ async def describe_image(image_path: str, question: str = "Describe this image i
     keyless vision tier, so with none of them set this fails fast and says so.
 
     Args:
-        image_path: Absolute path to a local image file (jpg/png).
+        image_path: Absolute path to a local image file (jpg/png/webp, at
+            most 10 MB). The bytes must really be one of those formats.
         question: What to ask about the image.
     """
     # Checked before the file is even opened: there is no keyless vision tier,
@@ -648,10 +707,22 @@ async def describe_image(image_path: str, question: str = "Describe this image i
             f"File too large to upload: {image_path} is {size} bytes; the limit is "
             f"{DESCRIBE_IMAGE_MAX_BYTES} (base64 inflates it by a third on top)."
         )
-    mime = "jpeg" if ext in ("jpg", "jpeg") else ext
     # Blocking disk read - off the event loop, same rule as every other
     # file access in this module.
-    img_b64 = await asyncio.to_thread(_read_image_b64, path)
+    data = await asyncio.to_thread(_read_image_bytes, path)
+    if data is None:
+        return f"File too large to upload: {image_path} grew past {DESCRIBE_IMAGE_MAX_BYTES} bytes while being read."
+    # The extension alone is only a filename: check the bytes before they
+    # leave the machine, so a renamed key or document is never uploaded.
+    # The sniffed format also names the data URL correctly for the common
+    # case of a JPEG saved as .png.
+    mime = _sniff_image_format(data)
+    if mime not in DESCRIBE_IMAGE_ALLOWED_FORMATS:
+        return (
+            f"Not uploading {image_path}: its contents are not a JPEG, PNG or WebP image "
+            "(checked by file signature, not by extension)."
+        )
+    img_b64 = base64.b64encode(data).decode()
 
     messages = [
         {
@@ -676,7 +747,7 @@ async def describe_image(image_path: str, question: str = "Describe this image i
 
 
 @mcp.tool()
-async def check_content_safety(text: str) -> str:
+async def check_content_safety(text: Annotated[str, Field(description="The text to check.")]) -> str:
     """Check whether text is safe/appropriate using NVIDIA's content-safety NIM.
 
     Useful before publishing user-generated content, comments, or chat messages
@@ -725,7 +796,7 @@ async def check_content_safety(text: str) -> str:
 
 
 @mcp.tool()
-async def create_embedding(text: str) -> str:
+async def create_embedding(text: Annotated[str, Field(description="The text to embed.")]) -> str:
     """Create a semantic embedding vector for text, for search/RAG use cases.
 
     Saves the vector to a local JSON file (too large to return inline) and
@@ -762,8 +833,16 @@ async def create_embedding(text: str) -> str:
     else:
         request_error = f"{NVIDIA_API_KEY_ENV} not set in .env - NVIDIA tier skipped"
 
+    vector = None
     if resp is not None and resp.status_code == 200:
-        vector = resp.json()["data"][0]["embedding"]
+        try:
+            vector = resp.json()["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            # A 200 that is not the documented shape (or not JSON at all)
+            # is a failed tier like any other: fall through to local.
+            request_error = "malformed response from the NVIDIA embedding endpoint"
+            resp = None
+    if vector is not None:
         model_used = EMBED_MODEL
     else:
         vector = await asyncio.to_thread(_local_embedding, text)
