@@ -1677,7 +1677,7 @@ wheels = [
 ]
 
 [[package]]
-name = "nvidia-nim"
+name = "nvidia-nim-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

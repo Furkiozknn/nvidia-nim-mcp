@@ -30,8 +30,11 @@ jobs:
         with:
           enable-cache: true
 
+      # --locked: fail if uv.lock is out of date with pyproject.toml instead
+      # of silently re-resolving. It had drifted (the lock still named the
+      # project "nvidia-nim"), which plain `uv sync` hid.
       - name: Install dependencies
-        run: uv sync --python ${{ matrix.python-version }}
+        run: uv sync --locked --python ${{ matrix.python-version }}
 
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest
