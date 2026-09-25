@@ -74,3 +74,9 @@ def test_server_json_fits_the_registry_schema_and_matches_pyproject():
     assert package["identifier"] == project["name"]
     assert package["version"] == project["version"]
     assert f"mcp-name: {server['name']}" in README
+
+
+def test_server_reports_the_package_version():
+    # serverInfo.version comes from here; it was empty before 0.1.0 shipped.
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert nvidia_image.mcp.version == pyproject["project"]["version"]

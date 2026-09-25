@@ -6,6 +6,7 @@ import os
 import threading
 import urllib.parse
 from datetime import datetime
+from importlib import metadata
 from pathlib import Path
 from typing import Annotated
 
@@ -19,7 +20,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer("nvidia-nim")
+try:
+    __version__ = metadata.version("nvidia-nim-mcp")
+except metadata.PackageNotFoundError:  # run from a checkout without installing
+    __version__ = "0+unknown"
+
+# Without version= the initialize reply carries an empty serverInfo.version,
+# so a client cannot tell which release it is talking to.
+mcp = MCPServer("nvidia-nim", version=__version__)
 
 NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
 GENAI_BASE = "https://ai.api.nvidia.com/v1/genai"

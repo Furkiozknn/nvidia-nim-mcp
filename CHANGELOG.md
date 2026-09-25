@@ -27,6 +27,8 @@ and to the MCP Registry (`io.github.Furkiozknn/nvidia-nim-mcp`).
 
 ### Fixed before release
 
+- `serverInfo.version` in the `initialize` reply was empty; it now carries
+  the installed package version.
 - Cross-provider fallback: with `NVIDIA_API_KEY` set, litellm's `fallbacks=`
   copied NVIDIA's `api_base` into the Groq/Mistral/Gemini/Cerebras entries.
   Their keys were sent to NVIDIA's endpoint, and the fallback never answered.
