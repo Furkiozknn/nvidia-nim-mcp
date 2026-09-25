@@ -128,13 +128,15 @@ async def test_multi_provider_chat_returns_none_when_everything_fails(nvidia_key
 
 
 @pytest.mark.asyncio
-async def test_multi_provider_chat_passes_built_chain_as_fallbacks(nvidia_key, monkeypatch):
-    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+async def test_multi_provider_chat_tries_the_built_chain_in_order(nvidia_key, monkeypatch):
+    """One litellm call per entry, in chain order, each with only its own
+    kwargs (see tests/test_chain_isolation.py for why not litellm's
+    `fallbacks=`)."""
     monkeypatch.setenv("GROQ_API_KEY", "groq-key")
     for env in ("MISTRAL_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY"):
         monkeypatch.delenv(env, raising=False)
 
-    captured = {}
+    calls = []
 
     class FakeMessage:
         content = "ok"
@@ -144,19 +146,20 @@ async def test_multi_provider_chat_passes_built_chain_as_fallbacks(nvidia_key, m
 
     class FakeCompletionResponse:
         choices = [FakeChoice()]
-        model = "openai/nvidia/model-a"
+        model = "groq/openai/gpt-oss-120b"
 
     async def fake_acompletion(**kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
+        if kwargs["model"].startswith("openai/"):
+            raise RuntimeError("NVIDIA model down")
         return FakeCompletionResponse()
 
     monkeypatch.setattr(nvidia_image.litellm, "acompletion", fake_acompletion)
 
-    await nvidia_image._multi_provider_chat(["nvidia/model-a"], MESSAGES)
+    result = await nvidia_image._multi_provider_chat(["nvidia/model-a"], MESSAGES)
 
-    assert captured["model"] == "openai/nvidia/model-a"
-    assert len(captured["fallbacks"]) == 1
-    assert captured["fallbacks"][0]["model"] == "groq/openai/gpt-oss-120b"
+    assert result == ("ok", "groq/openai/gpt-oss-120b")
+    assert [c["model"] for c in calls] == ["openai/nvidia/model-a", "groq/openai/gpt-oss-120b"]
 
 
 @pytest.mark.asyncio

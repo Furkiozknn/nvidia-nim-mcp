@@ -199,26 +199,51 @@ def _build_chat_chain(nvidia_models: list[str]) -> list[dict]:
     return chain
 
 
+def _redact_known_keys(text: str) -> str:
+    """_redact for every provider key currently set, not just one. For
+    messages that may come from any provider in a chain (litellm exception
+    text), where the caller cannot know which key could be echoed."""
+    for secret in (_api_key(), *(os.environ.get(p["env"]) for p in (*EXTRA_PROVIDERS, *VISION_PROVIDERS))):
+        text = _redact(text, secret)
+    return text
+
+
 async def _run_chat_chain(chain: list[dict], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
-    """Execute a pre-built litellm provider chain (primary + fallbacks).
+    """Try each entry of a pre-built provider chain in order and return
+    (content, model) from the first one that answers with text, or None.
     Shared by _multi_provider_chat (NVIDIA-prefixed) and
     _chat_via_provider_chain (cross-provider only) so the actual
-    execution/error-handling logic exists in exactly one place."""
-    if not chain:
-        return None
-    primary, fallbacks = chain[0], chain[1:]
-    try:
-        response = await litellm.acompletion(
-            messages=messages,
-            max_tokens=max_tokens,
-            fallbacks=fallbacks or None,
-            timeout=LLM_TIMEOUT,
-            **primary,
-        )
-    except Exception as e:
-        logger.warning("all providers in chain failed: %s", e)
-        return None
-    return response.choices[0].message.content, response.model
+    execution/error-handling logic exists in exactly one place.
+
+    Each entry is its own litellm call with only its own kwargs. litellm's
+    `fallbacks=` parameter is deliberately not used: it copies the primary
+    call's kwargs into every fallback, so with NVIDIA first, the Groq and
+    Mistral entries inherited NVIDIA's api_base - their keys were sent to
+    NVIDIA's endpoint and the cross-provider fallback could never answer.
+
+    max_retries=0: the chain is the retry. litellm's default retried each
+    NVIDIA entry twice more (with backoff) before the next model got a turn.
+    """
+    for entry in chain:
+        try:
+            response = await litellm.acompletion(
+                messages=messages,
+                max_tokens=max_tokens,
+                timeout=LLM_TIMEOUT,
+                max_retries=0,
+                **entry,
+            )
+            content = response.choices[0].message.content
+        except Exception as e:
+            logger.warning("%s failed: %s", entry["model"], _redact_known_keys(str(e)))
+            continue
+        if not content:
+            # A reasoning model can spend the whole max_tokens budget before
+            # writing any answer; an empty reply is a failed tier, not a result.
+            logger.warning("%s returned no text", entry["model"])
+            continue
+        return content, response.model
+    return None
 
 
 async def _multi_provider_chat(nvidia_models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
@@ -407,6 +432,20 @@ def _sniff_image_format(body: bytes) -> str | None:
     return None
 
 
+def _prompt_path_segment(prompt: str) -> str:
+    """The prompt as exactly one URL path segment under /prompt/.
+
+    urllib.parse.quote leaves "/" alone by default, so "AC/DC poster" became
+    two segments and "../../models" climbed out of /prompt/ to another path
+    on the host. Everything is escaped here, and a prompt that is only dots
+    (".", "..") is escaped too, because the URL parser would otherwise treat
+    it as a dot segment."""
+    encoded = urllib.parse.quote(prompt, safe="")
+    if encoded.strip(".") == "":
+        encoded = encoded.replace(".", "%2E")
+    return encoded
+
+
 async def _generate_image_pollinations(client: httpx2.AsyncClient, prompt: str, seed: int, width: int, height: int) -> bytes:
     """Generate via the free Pollinations.ai backend - only called from
     generate_image after every NVIDIA model has already failed.
@@ -415,7 +454,7 @@ async def _generate_image_pollinations(client: httpx2.AsyncClient, prompt: str, 
     image (Content-Type and magic bytes) before it is returned - a free
     endpoint under load happily serves HTML error pages with a 200, and
     those must not be written to disk as a .jpg."""
-    encoded = urllib.parse.quote(prompt)
+    encoded = _prompt_path_segment(prompt)
     params = {"width": width, "height": height, "nologo": "true", "seed": seed}
     async with client.stream(
         "GET", f"{POLLINATIONS_BASE}/{encoded}", params=params, timeout=60.0, follow_redirects=True
@@ -511,7 +550,7 @@ def _no_provider_message(action: str, providers: list[dict]) -> str:
 
 @mcp.tool()
 async def generate_image(
-    prompt: Annotated[str, Field(description="Description of the image to generate.")],
+    prompt: Annotated[str, Field(min_length=1, description="Description of the image to generate.")],
     seed: Annotated[int, Field(ge=0, description="Seed for reproducibility.")] = 0,
     width: Annotated[
         int, Field(ge=IMAGE_MIN_SIDE, le=IMAGE_MAX_SIDE, description="Image width in pixels.")
@@ -709,7 +748,10 @@ async def describe_image(
         )
     # Blocking disk read - off the event loop, same rule as every other
     # file access in this module.
-    data = await asyncio.to_thread(_read_image_bytes, path)
+    try:
+        data = await asyncio.to_thread(_read_image_bytes, path)
+    except OSError as e:
+        return f"Cannot read {image_path}: {e.strerror or e}"
     if data is None:
         return f"File too large to upload: {image_path} grew past {DESCRIBE_IMAGE_MAX_BYTES} bytes while being read."
     # The extension alone is only a filename: check the bytes before they
