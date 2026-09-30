@@ -11,11 +11,26 @@
 
 # nvidia-nim-mcp
 
-An MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server that plugs [NVIDIA NIM](https://build.nvidia.com/)'s free-tier models straight into Claude Code — image generation, translation, LLM chat, vision, content safety, embeddings, and a provider health check — behind seven small, consistent tools.
+Seven MCP tools on [NVIDIA NIM](https://build.nvidia.com/)'s free tier for Claude Code - image, translation, a second-opinion chat model, vision, content safety, embeddings and a health check - each of which keeps working when a model is slow, rate-limited or quietly retired.
 
-The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and two of them — translation and the "ask another LLM" tool — keep going past NVIDIA into whichever free-tier providers you've configured (Groq, Mistral, Gemini, Cerebras). The caller never has to know or care which model actually answered.
+```bash
+claude mcp add --transport stdio --env NVIDIA_API_KEY=YOUR_KEY nvidia-nim -- \
+  uvx --from git+https://github.com/Furkiozknn/nvidia-nim-mcp nvidia-nim-mcp
+```
 
-Zero cost. No credit card. Just an API key from [build.nvidia.com](https://build.nvidia.com/).
+One command, nothing to clone. The key is free at [build.nvidia.com](https://build.nvidia.com/) (no credit card). Leave `--env` out and `generate_image` still works, because its last tier needs no key; `nvidia-nim-mcp --help` lists what each key unlocks. Measured install and first-start times are in [docs/DENETIM.md](docs/DENETIM.md).
+
+![Terminal: nvidia-nim-mcp started over stdio, seven tools listed, then what a tool answers with no key and what an unknown tool gives](docs/demo/demo.gif)
+
+<sub>Every line above is real output, recorded by [`scripts/demo-uret.py`](scripts/demo-uret.py) with no provider key set (record: [`docs/demo/komutlar.txt`](docs/demo/komutlar.txt)). [`scripts/sonda.py`](scripts/sonda.py) is the probe it uses: it starts any stdio MCP server and prints what it answers.</sub>
+
+| Use it when | Do not use it when |
+|---|---|
+| you want Claude Code to ask a **non-Anthropic** model for a second opinion, translate, describe a screenshot or moderate text, and you want that on a free key | you need a guaranteed model or a stable output - the free tier drops and retires models, and the answering model is named at the end of every reply so you can see which one it was |
+| you want image generation with **no key at all** (Pollinations.ai is the keyless last tier) | you cannot send the prompt, text or image to a third party: every tool except the local embedding sends its input to NVIDIA or to the fallback provider you configured |
+| you want one server that degrades to Groq, Mistral, Gemini or Cerebras instead of failing | you need paid-tier throughput, an SLA or private inference |
+
+The idea is simple: **a model being slow, rate-limited, or quietly retired should never take a tool down.** Every capability tries more than one model, and two of them - translation and the "ask another LLM" tool - keep going past NVIDIA into whichever free-tier providers you've configured (Groq, Mistral, Gemini, Cerebras). The caller never has to know or care which model actually answered.
 
 ## Table of Contents
 
@@ -76,13 +91,11 @@ Why the split? Image generation and embeddings each have a genuinely keyless tie
 
 ## ⚙️ Setup
 
-**1. Install dependencies** (this project uses [`uv`](https://docs.astral.sh/uv/), not bare pip/venv):
+**1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/)**, then register the server with the command at the top of this page. That is the whole install; `uvx` fetches and caches the package.
 
-```bash
-uv sync
-```
+Working from a clone instead (to hack on it)? `uv sync`, then register `uv run --project /path/to/this/repo nvidia_image.py` in place of the `uvx` command.
 
-**2. Create a `.env` file** in the project root. `.env.example` shows the shape:
+**2. Give it keys.** For the `uvx` install put them in the server's environment (`--env NAME=value` on `claude mcp add`, or the `env` block of your MCP config). From a clone, a `.env` file next to `nvidia_image.py` is read as well; `.env.example` shows the shape:
 
 ```bash
 # Recommended — unlocks the highest-quality tier of every tool.
@@ -106,13 +119,15 @@ The key is read from the environment **per request**, not once at startup, so ro
 | Mistral | [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys) |
 | Gemini | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 
-**3. Register it as an MCP server** with Claude Code (project or user scope):
+**3. Check it started.** Registering is not proof it runs. From a clone, this starts the server, does the MCP handshake and lists the tools, with every provider key removed from its environment:
 
 ```bash
-claude mcp add --transport stdio nvidia-nim -- uv run --project /path/to/this/repo nvidia_image.py
+uv run python scripts/sonda.py --no-keys -- nvidia-nim-mcp
 ```
 
-That's it — `nvidia-nim`'s seven tools are now available to Claude Code in any session where the server is registered.
+It prints `initialize ok`, the seven tools and how long the start took (about 4 s here; the first `uvx` run adds the download). Exit code 0 means the server answered, 3 means it did not start.
+
+When a key is wrong, the tool says so instead of the generic "failed or timed out": `NVIDIA_API_KEY` set but rejected gives `HTTP 401 (key rejected - check the API key)` from `check_provider_health`, and the failing tool appends a line naming the fix. With no key at all, a tool that needs one answers with the list of keys that would work and where to set them.
 
 ## ▶️ Example usage
 
@@ -166,15 +181,16 @@ uv run pytest tests/test_api_key_guard.py  # one module
 uv run pytest -q                         # quiet
 ```
 
-The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and no network access needed to run it**, and nothing in it reaches a real provider. It covers:
+The suite (`tests/`) mocks every HTTP/litellm call — **no `NVIDIA_API_KEY` and no network access needed to run it**, and nothing in it reaches a real provider (the one test that starts the server as a subprocess only does `initialize` and `tools/list`). It covers:
 
 - **fallback-chain ordering** per tool, and the cross-provider gating logic (`tests/test_fallback.py`, `tests/test_build_chat_chain.py`);
 - **what each tool does with no `NVIDIA_API_KEY`** — that the keyless tiers are actually reached, and that the tools without one name every key that would work (`tests/test_api_key_guard.py`);
 - **the upload guards** on `describe_image` and the bounded, content-verified Pollinations download (`tests/test_generate_image.py`, `tests/test_describe_image_fallback.py`);
 - **output-filename collisions** — two calls in the same wall-clock second must not overwrite each other — and that a provider's error body is returned with the API key scrubbed out;
-- **`check_provider_health`'s per-model OK/FAIL reporting**, including that one dead model never hides the others' status.
+- **`check_provider_health`'s per-model OK/FAIL reporting**, including that one dead model never hides the others' status;
+- **first use** (`tests/test_first_use.py`): importing the server must not import `litellm` (about 10 s of a 13 s start), a real stdio handshake lists all seven tools, `--help` prints the same install command as this README, and a rejected key is reported as a rejected key while every other failure keeps its plain message.
 
-CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push/PR.
+CI (`.github/workflows/ci.yml`) runs `uv run pytest` on every push/PR, and `uv lock --check` so the committed `uv.lock` cannot drift from `pyproject.toml` again.
 
 ## What this server can actually do
 
@@ -197,6 +213,8 @@ runs stays right by default.
 ```
 nvidia-nim-mcp/
 ├── nvidia_image.py     # the MCP server — all 7 tools live here
+├── scripts/            # sonda.py (stdio probe), demo-uret.py + demo-kayit.js (the terminal demo)
+├── docs/               # DENETIM.md (measured audit), TASARIM.md (design), demo/ (recording)
 ├── tests/               # pytest suite, fully mocked, no API key needed
 ├── pyproject.toml      # uv project + dependencies (httpx, litellm, mcp)
 ├── .env.example        # copy to .env and fill in your keys

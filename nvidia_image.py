@@ -1,15 +1,16 @@
 import asyncio
 import base64
+import importlib.metadata
 import json
 import logging
 import os
+import sys
 import threading
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
 import httpx2
-import litellm
 from dotenv import load_dotenv
 from mcp.server import MCPServer
 
@@ -17,7 +18,41 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-mcp = MCPServer("nvidia-nim")
+
+def _version() -> str:
+    try:
+        return importlib.metadata.version("nvidia-nim-mcp")
+    except importlib.metadata.PackageNotFoundError:  # running from a source checkout
+        return ""
+
+
+class _LazyLitellm:
+    """Stands in for the `litellm` module without importing it.
+
+    `import litellm` takes about 10 s on a laptop (measured: 9.8 s of a 13 s
+    server start) and MCP clients wait a limited time for `initialize`. Only
+    the chat tools need it, so it is imported on first use (main() also warms
+    it on a background thread). Attribute reads AND writes go to the real
+    module, so `litellm.acompletion` and `monkeypatch.setattr(litellm, ...)`
+    behave exactly as before.
+    """
+
+    def __getattr__(self, name):
+        return getattr(_load_litellm(), name)
+
+    def __setattr__(self, name, value):
+        setattr(_load_litellm(), name, value)
+
+
+def _load_litellm():
+    import litellm as real
+
+    return real
+
+
+litellm = _LazyLitellm()
+
+mcp = MCPServer("nvidia-nim", version=_version())
 
 NVIDIA_API_KEY_ENV = "NVIDIA_API_KEY"
 GENAI_BASE = "https://ai.api.nvidia.com/v1/genai"
@@ -62,6 +97,43 @@ def _stamp() -> str:
     silently overwrite each other's file - the same bug, and the same fix,
     as voice-io-mcp's _stamp()."""
     return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+
+# A provider that answers 401/403 is telling us the KEY is wrong, which is a
+# different problem from "model retired" or "rate limited" - and the one the
+# caller can actually fix. It is recorded so the tool's final failure message
+# can say so instead of the generic "failed or timed out".
+AUTH_REJECTED = "auth_rejected"
+
+KEY_REJECTED_HINT = (
+    "\nA provider rejected its API key (HTTP 401/403). Check that the key is current, "
+    "has no stray quotes or spaces, and is set in this server's environment "
+    "(NVIDIA keys: https://build.nvidia.com/). Run check_provider_health to see which one."
+)
+
+
+def _is_auth_status(status_code: int) -> bool:
+    return status_code in (401, 403)
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """litellm raises AuthenticationError / PermissionDeniedError (with a
+    status_code) for a rejected key."""
+    return _is_auth_status(getattr(exc, "status_code", 0) or 0) or type(exc).__name__ in (
+        "AuthenticationError",
+        "PermissionDeniedError",
+    )
+
+
+def _key_hint(problems: list[str] | None) -> str:
+    """The extra line to append to a tool's failure message - empty unless a
+    key was actually rejected, so every other failure message is unchanged."""
+    return KEY_REJECTED_HINT if problems and AUTH_REJECTED in problems else ""
+
+
+def _http_detail(status_code: int) -> str:
+    """'HTTP 401 (key rejected)' for auth failures, plain 'HTTP n' otherwise."""
+    return f"HTTP {status_code}" + (" (key rejected - check the API key)" if _is_auth_status(status_code) else "")
 
 
 def _redact(text: str, secret: str | None) -> str:
@@ -181,7 +253,9 @@ def _build_chat_chain(nvidia_models: list[str]) -> list[dict]:
     return chain
 
 
-async def _run_chat_chain(chain: list[dict], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+async def _run_chat_chain(
+    chain: list[dict], messages: list[dict], max_tokens: int = 1024, problems: list[str] | None = None
+) -> tuple[str, str] | None:
     """Execute a pre-built litellm provider chain (primary + fallbacks).
     Shared by _multi_provider_chat (NVIDIA-prefixed) and
     _chat_via_provider_chain (cross-provider only) so the actual
@@ -199,13 +273,17 @@ async def _run_chat_chain(chain: list[dict], messages: list[dict], max_tokens: i
         )
     except Exception as e:
         logger.warning("all providers in chain failed: %s", e)
+        if problems is not None and _is_auth_error(e):
+            problems.append(AUTH_REJECTED)
         return None
     return response.choices[0].message.content, response.model
 
 
-async def _multi_provider_chat(nvidia_models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+async def _multi_provider_chat(
+    nvidia_models: list[str], messages: list[dict], max_tokens: int = 1024, problems: list[str] | None = None
+) -> tuple[str, str] | None:
     """Try NVIDIA models, then any configured free-tier provider, in order."""
-    return await _run_chat_chain(_build_chat_chain(nvidia_models), messages, max_tokens)
+    return await _run_chat_chain(_build_chat_chain(nvidia_models), messages, max_tokens, problems)
 
 VISION_MODELS = [
     "nvidia/nemotron-nano-12b-v2-vl",
@@ -274,13 +352,21 @@ def _build_provider_chain(providers: list[dict]) -> list[dict]:
     return chain
 
 
-async def _chat_via_provider_chain(providers: list[dict], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+async def _chat_via_provider_chain(
+    providers: list[dict], messages: list[dict], max_tokens: int = 1024, problems: list[str] | None = None
+) -> tuple[str, str] | None:
     """Try each configured provider in `providers`, in declared order, via
     litellm. Returns None if none are configured or all fail - never raises."""
-    return await _run_chat_chain(_build_provider_chain(providers), messages, max_tokens)
+    return await _run_chat_chain(_build_provider_chain(providers), messages, max_tokens, problems)
 
 
-async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], messages: list[dict], max_tokens: int = 1024) -> tuple[str, str] | None:
+async def _chat_with_fallback(
+    client: httpx2.AsyncClient,
+    models: list[str],
+    messages: list[dict],
+    max_tokens: int = 1024,
+    problems: list[str] | None = None,
+) -> tuple[str, str] | None:
     """Try each model in order, return (content, model_used) from the first
     success. These are NVIDIA-only endpoints, so with no NVIDIA_API_KEY there
     is nothing here to try: return None immediately and let the caller move
@@ -296,6 +382,8 @@ async def _chat_with_fallback(client: httpx2.AsyncClient, models: list[str], mes
         except httpx2.TimeoutException:
             continue
         if resp.status_code != 200:
+            if problems is not None and _is_auth_status(resp.status_code):
+                problems.append(AUTH_REJECTED)
             continue
         try:
             content = resp.json()["choices"][0]["message"]["content"]
@@ -334,7 +422,7 @@ async def _probe_nvidia_chat_model(client: httpx2.AsyncClient, model: str) -> tu
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_detail(resp.status_code)
     return True, "ok"
 
 
@@ -349,7 +437,7 @@ async def _probe_nvidia_image_model(client: httpx2.AsyncClient, slug: str) -> tu
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_detail(resp.status_code)
     return True, "ok"
 
 
@@ -363,7 +451,7 @@ async def _probe_nvidia_embed_model(client: httpx2.AsyncClient, model: str) -> t
     except Exception as e:
         return False, f"error: {_redact(str(e), _api_key())}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_detail(resp.status_code)
     return True, "ok"
 
 
@@ -433,7 +521,7 @@ async def _probe_pollinations(client: httpx2.AsyncClient) -> tuple[bool, str]:
     except Exception as e:
         return False, f"error: {e}"
     if resp.status_code != 200:
-        return False, f"HTTP {resp.status_code}"
+        return False, _http_detail(resp.status_code)
     return True, "ok"
 
 
@@ -476,8 +564,10 @@ def _no_provider_message(action: str, providers: list[dict]) -> str:
     "NVIDIA_API_KEY not set" guard did not: these tools run on any one of
     several free-tier keys, and NVIDIA's is only the first of them."""
     return (
-        f"{action}: no provider configured. Set {NVIDIA_API_KEY_ENV} in .env, "
-        f"or any of {', '.join(p['env'] for p in providers)} for a free-tier fallback."
+        f"{action}: no provider configured. Set {NVIDIA_API_KEY_ENV} (free: https://build.nvidia.com/), "
+        f"or any of {', '.join(p['env'] for p in providers)} for a free-tier fallback. "
+        "Put it in the environment of this MCP server (the env of its registration) "
+        "or in a .env file next to nvidia_image.py."
     )
 
 
@@ -491,7 +581,8 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
     silently drops the caller to a lower-quality free tier.
 
     Works with NO API key at all: without NVIDIA_API_KEY the NVIDIA tier is
-    skipped and the keyless Pollinations tier is used directly.
+    skipped and the keyless Pollinations tier is used directly. The prompt is
+    sent to NVIDIA, or to Pollinations.ai on the fallback tier.
 
     Args:
         prompt: Description of the image to generate.
@@ -503,6 +594,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
     # is free and keyless, so an unkeyed caller simply starts there.
     api_key = _api_key()
     errors = []
+    problems: list[str] = []
     async with httpx2.AsyncClient() as client:
         if api_key:
             headers = _headers()
@@ -521,8 +613,10 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                     errors.append(f"{model['slug']}: timed out")
                     continue
                 if resp.status_code != 200:
+                    if _is_auth_status(resp.status_code):
+                        problems.append(AUTH_REJECTED)
                     errors.append(
-                        f"{model['slug']}: HTTP {resp.status_code} - {_redact(resp.text[:150], api_key)}"
+                        f"{model['slug']}: {_http_detail(resp.status_code)} - {_redact(resp.text[:150], api_key)}"
                     )
                     continue
                 data = resp.json()
@@ -537,7 +631,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                 await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
                 return f"Image saved to {filepath} (model: {model['slug']})"
         else:
-            errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set in .env")
+            errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set")
 
         try:
             image_bytes = await _generate_image_pollinations(client, prompt, seed, width, height)
@@ -549,7 +643,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
             await asyncio.to_thread(filepath.write_bytes, image_bytes)
             return f"Image saved to {filepath} (model: pollinations, fallback after NVIDIA models failed)"
 
-    return "All image models failed:\n" + "\n".join(errors)
+    return "All image models failed:\n" + "\n".join(errors) + _key_hint(problems)
 
 
 @mcp.tool()
@@ -571,10 +665,11 @@ async def translate_text(text: str, target_language: str) -> str:
         return _no_provider_message("translate_text", EXTRA_PROVIDERS)
 
     messages = [{"role": "user", "content": f"Translate to {target_language}: {text}"}]
-    result = await _multi_provider_chat(TRANSLATE_MODELS, messages)
+    problems: list[str] = []
+    result = await _multi_provider_chat(TRANSLATE_MODELS, messages, problems=problems)
 
     if result is None:
-        return "All translation models/providers failed or timed out."
+        return "All translation models/providers failed or timed out." + _key_hint(problems)
     content, model = result
     return f"{content}\n\n(model: {model})"
 
@@ -602,10 +697,11 @@ async def ask_llm(question: str, system_prompt: str | None = None) -> str:
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": question})
 
-    result = await _multi_provider_chat(LLM_MODELS, messages, max_tokens=2048)
+    problems: list[str] = []
+    result = await _multi_provider_chat(LLM_MODELS, messages, max_tokens=2048, problems=problems)
 
     if result is None:
-        return "All LLM fallback models/providers failed or timed out."
+        return "All LLM fallback models/providers failed or timed out." + _key_hint(problems)
     content, model = result
     return f"{content}\n\n(model: {model})"
 
@@ -619,9 +715,11 @@ async def describe_image(image_path: str, question: str = "Describe this image i
 
     Needs NVIDIA_API_KEY *or* one of GROQ/MISTRAL/GEMINI_API_KEY - there is no
     keyless vision tier, so with none of them set this fails fast and says so.
+    The file is uploaded (base64) to NVIDIA, or to the fallback provider that
+    is configured; only jpg/jpeg/png/webp up to 10 MB are accepted.
 
     Args:
-        image_path: Absolute path to a local image file (jpg/png).
+        image_path: Absolute path to a local image file (jpg/jpeg/png/webp).
         question: What to ask about the image.
     """
     # Checked before the file is even opened: there is no keyless vision tier,
@@ -663,14 +761,15 @@ async def describe_image(image_path: str, question: str = "Describe this image i
         }
     ]
 
+    problems: list[str] = []
     async with httpx2.AsyncClient() as client:
-        result = await _chat_with_fallback(client, VISION_MODELS, messages, max_tokens=512)
+        result = await _chat_with_fallback(client, VISION_MODELS, messages, max_tokens=512, problems=problems)
 
     if result is None:
-        result = await _chat_via_provider_chain(VISION_PROVIDERS, messages, max_tokens=512)
+        result = await _chat_via_provider_chain(VISION_PROVIDERS, messages, max_tokens=512, problems=problems)
 
     if result is None:
-        return "All vision models failed or timed out."
+        return "All vision models failed or timed out." + _key_hint(problems)
     content, model = result
     return f"{content}\n\n(model: {model})"
 
@@ -698,8 +797,9 @@ async def check_content_safety(text: str) -> str:
         return _no_provider_message("check_content_safety", EXTRA_PROVIDERS)
 
     messages = [{"role": "user", "content": text}]
+    problems: list[str] = []
     async with httpx2.AsyncClient() as client:
-        result = await _chat_with_fallback(client, [SAFETY_MODEL], messages, max_tokens=100)
+        result = await _chat_with_fallback(client, [SAFETY_MODEL], messages, max_tokens=100, problems=problems)
 
     if result is not None:
         content, _ = result
@@ -717,9 +817,11 @@ async def check_content_safety(text: str) -> str:
         },
         {"role": "user", "content": text},
     ]
-    fallback_result = await _chat_via_provider_chain(EXTRA_PROVIDERS, fallback_messages, max_tokens=100)
+    fallback_result = await _chat_via_provider_chain(
+        EXTRA_PROVIDERS, fallback_messages, max_tokens=100, problems=problems
+    )
     if fallback_result is None:
-        return "Content safety check failed."
+        return "Content safety check failed." + _key_hint(problems)
     content, model = fallback_result
     return f"{content}\n\n(best-effort fallback verdict from {model}, not the dedicated NVIDIA safety model)"
 
@@ -771,13 +873,14 @@ async def create_embedding(text: str) -> str:
 
     if vector is None:
         detail = (
-            f"HTTP {resp.status_code} - {_redact(resp.text[:300], api_key)}"
+            f"{_http_detail(resp.status_code)} - {_redact(resp.text[:300], api_key)}"
             if resp is not None
             else request_error
         )
+        hint = KEY_REJECTED_HINT if resp is not None and _is_auth_status(resp.status_code) else ""
         return (
             f"NVIDIA embedding failed ({detail}) and no local fallback available "
-            "(run `uv sync --extra local-embeddings` to enable one)."
+            "(run `uv sync --extra local-embeddings` to enable one)." + hint
         )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -885,14 +988,74 @@ async def check_provider_health() -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+HELP = """\
+nvidia-nim-mcp - MCP server (stdio) for NVIDIA NIM's free tier: seven tools
+(generate_image, translate_text, ask_llm, describe_image, check_content_safety,
+create_embedding, check_provider_health).
+
+It speaks the Model Context Protocol on stdin/stdout, so an MCP client starts
+it; typing it at a prompt does nothing useful. Register it with Claude Code:
+
+  claude mcp add --transport stdio --env NVIDIA_API_KEY=YOUR_KEY nvidia-nim -- \\
+    uvx --from git+https://github.com/Furkiozknn/nvidia-nim-mcp nvidia-nim-mcp
+
+Keys, all optional, read from the environment on every call (a .env file next
+to nvidia_image.py is read too): NVIDIA_API_KEY (free: https://build.nvidia.com/),
+GROQ_API_KEY, MISTRAL_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY.
+With no key at all, generate_image (Pollinations.ai) and check_provider_health
+still work, and create_embedding does once the local-embeddings extra is
+installed; the other tools answer with the list of keys that would enable them.
+
+Generated files go to ./output under the current directory, or to
+NVIDIA_NIM_OUTPUT_DIR.
+
+options:
+  -h, --help  show this message and exit
+  --version   print the version and exit
+"""
+
+
+def _startup_line() -> str:
+    """One status line for the MCP client's server log. Names which keys are
+    present, never their values."""
+    free = [p["env"] for p in EXTRA_PROVIDERS if os.environ.get(p["env"])]
+    return (
+        f"nvidia-nim-mcp {_version() or '(source checkout)'} on stdio: "
+        f"{NVIDIA_API_KEY_ENV} {'set' if _api_key() else 'NOT set (keyless tiers only)'}; "
+        f"free-tier keys: {', '.join(free) or 'none'}; output: {OUTPUT_DIR}"
+    )
+
+
+def main(argv: list[str] | None = None) -> None:
     """Console entry point.
 
     A separate function because `[project.scripts]` wants a CALLABLE, not a
     module. Without it the package installs but cannot be run: the user would
     have to clone the repository and point at the file, which defeats the
     point of publishing it.
+
+    Before, any argument was ignored and `--help` started a server that
+    printed nothing and waited on stdin. Now `--help`/`--version` answer, and
+    a person who runs it at a terminal (stdin is a TTY, so no client is on the
+    other end) is told what it is instead of being left at a silent prompt.
     """
+    args = list(sys.argv[1:] if argv is None else argv)
+    if any(a in ("-h", "--help") for a in args):
+        print(HELP, end="")
+        return
+    if "--version" in args:
+        print(f"nvidia-nim-mcp {_version() or '(source checkout)'}")
+        return
+    if args:
+        print(f"nvidia-nim-mcp: unknown argument {args[0]!r}\nrun `nvidia-nim-mcp --help`", file=sys.stderr)
+        raise SystemExit(2)
+    if sys.stdin.isatty():
+        print(HELP, end="")
+        return
+    print(_startup_line(), file=sys.stderr)
+    # Pay the ~10 s litellm import in the background, after the handshake can
+    # already be answered, so the first chat call is not the one that waits.
+    threading.Thread(target=_load_litellm, daemon=True).start()
     mcp.run(transport="stdio")
 
 
