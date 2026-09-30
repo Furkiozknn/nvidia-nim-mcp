@@ -641,7 +641,8 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
             filepath = OUTPUT_DIR / f"pollinations_{_stamp()}.jpg"
             await asyncio.to_thread(filepath.write_bytes, image_bytes)
-            return f"Image saved to {filepath} (model: pollinations, fallback after NVIDIA models failed)"
+            why = "keyless tier, NVIDIA_API_KEY not set" if not api_key else "fallback after NVIDIA models failed"
+            return f"Image saved to {filepath} (model: pollinations, {why})"
 
     return "All image models failed:\n" + "\n".join(errors) + _key_hint(problems)
 

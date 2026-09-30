@@ -171,6 +171,25 @@ async def test_generate_image_with_a_rejected_key_says_so_and_shows_the_status(
 
 
 @pytest.mark.asyncio
+async def test_image_without_a_key_calls_pollinations_the_keyless_tier_not_a_fallback(
+    no_nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client()
+    result = await nvidia_image.generate_image(prompt="a cat")
+    assert "model: pollinations, keyless tier, NVIDIA_API_KEY not set" in result
+    assert "after NVIDIA models failed" not in result
+
+
+@pytest.mark.asyncio
+async def test_image_with_a_key_that_failed_still_says_fallback(nvidia_key, fake_async_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(post_side_effect=lambda *a, **kw: FakeResponse(503, text="overloaded"))
+    result = await nvidia_image.generate_image(prompt="a cat")
+    assert "fallback after NVIDIA models failed" in result
+
+
+@pytest.mark.asyncio
 async def test_generate_image_failing_with_503_has_no_key_hint(nvidia_key, fake_async_client, tmp_path, monkeypatch):
     monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
     fake_async_client(
