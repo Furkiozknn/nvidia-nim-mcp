@@ -29,3 +29,6 @@ secrets.json
 service-account*.json
 *.key
 !*.pub
+
+build/
+dist/

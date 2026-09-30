@@ -1,0 +1,33 @@
+# nvidia-nim-mcp terminal demo: real commands, real output
+# tarih: 2026-09-30T04:48:28+03:00
+# surum: 0.1.0 (uv pip install . ile kuruldu, PATH'teki nvidia-nim-mcp)
+# kaynak: https://github.com/Furkiozknn/nvidia-nim-mcp @ 9b48451 2026-09-30
+# saglayici anahtari yok (--no-keys) ve ortamdan da silindi: hicbir saglayiciya istek gitmedi
+# her komut bash -c 'set -o pipefail; ...' ile bos bir klasorde kosuldu; hicbir satir elle yazilmadi
+
+$ nvidia-nim-mcp --version
+nvidia-nim-mcp 0.1.0
+[cikis kodu 0] (3.63 s)
+
+$ python scripts/sonda.py --no-keys -- nvidia-nim-mcp
+initialize ok: nvidia-nim 0.1.0, 3.5 s
+tools/list: 7 tools
+  generate_image         Generate an image from a text prompt using NVIDIA NIM image models.
+  translate_text         Translate text to a target language using NVIDIA NIM models.
+  ask_llm                Ask a question to an alternative LLM (not Claude) via NVIDIA NIM, with
+  describe_image         Analyze/describe a local image using an NVIDIA NIM vision-language model.
+  check_content_safety   Check whether text is safe/appropriate using NVIDIA's content-safety NIM.
+  create_embedding       Create a semantic embedding vector for text, for search/RAG use cases.
+  check_provider_health  Check which configured NVIDIA models and cross-provider fallbacks are
+[cikis kodu 0] (7.00 s)
+
+$ python scripts/sonda.py --no-keys --call ask_llm '{"question": "hi"}' -- nvidia-nim-mcp | tail -n 3
+
+call ask_llm {"question": "hi"}  (0.3 s)
+  ask_llm: no provider configured. Set NVIDIA_API_KEY (free: https://build.nvidia.com/), or any of GROQ_API_KEY, MISTRAL_API_KEY, GEMINI_API_KEY, CEREBRAS_API_KEY for a free-tier fallback. Put it in the environment of this MCP server (the env of its registration) or in a .env file next to nvidia_image.py.
+[cikis kodu 0] (8.47 s)
+
+$ python scripts/sonda.py --no-keys --call nope '{}' -- nvidia-nim-mcp | tail -n 2
+call nope {}  (0.1 s, ERROR)
+  Unknown tool: nope
+[cikis kodu 1] (6.83 s)
