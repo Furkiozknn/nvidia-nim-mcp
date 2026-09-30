@@ -5,7 +5,6 @@ Nothing here reaches a real provider. The one test that starts the server as a
 subprocess only does `initialize` + `tools/list`, which need no key and no
 network.
 """
-import asyncio
 import os
 import subprocess
 import sys
@@ -53,23 +52,6 @@ def test_lazy_litellm_reads_and_writes_reach_the_real_module(monkeypatch):
     monkeypatch.setattr(nvidia_image.litellm, "acompletion", marker)
     assert real.acompletion is marker
     assert nvidia_image.litellm.acompletion is marker
-
-
-def test_real_stdio_handshake_lists_all_seven_tools(tmp_path):
-    from mcp.client import Client
-    from mcp.client.stdio import StdioServerParameters
-
-    async def probe():
-        params = StdioServerParameters(
-            command=sys.executable, args=[str(ROOT / "nvidia_image.py")], env=_clean_env(), cwd=str(tmp_path)
-        )
-        async with Client(params, read_timeout_seconds=60) as client:
-            tools = (await client.list_tools()).tools
-            return {t.name for t in tools}, all((t.description or "").strip() for t in tools)
-
-    names, all_described = asyncio.run(probe())
-    assert names == TOOLS
-    assert all_described
 
 
 # --- --help / --version ---------------------------------------------------
@@ -226,19 +208,21 @@ def _sonda(*args, cwd=None):
     )
 
 
-def test_sonda_starts_the_server_lists_seven_tools_and_exits_zero(tmp_path):
-    done = _sonda("--no-keys", "--", sys.executable, str(ROOT / "nvidia_image.py"), cwd=tmp_path)
-    assert done.returncode == 0, done.stderr
-    assert "initialize ok: nvidia-nim" in done.stdout
-    assert "tools/list: 7 tools" in done.stdout
-
-
-def test_sonda_call_reports_the_tool_answer_and_an_unknown_tool_exits_one(tmp_path):
-    server = [sys.executable, str(ROOT / "nvidia_image.py")]
-    ok = _sonda("--no-keys", "--call", "ask_llm", '{"question": "hi"}', "--", *server, cwd=tmp_path)
-    assert ok.returncode == 0 and "no provider configured" in ok.stdout
-    bad = _sonda("--no-keys", "--call", "nope", "{}", "--", *server, cwd=tmp_path)
-    assert bad.returncode == 1 and "Unknown tool: nope" in bad.stdout
+def test_real_stdio_handshake_lists_all_seven_tools_and_calls_answer(tmp_path):
+    """One real server start (they cost ~4 s each): the handshake, all seven
+    tools with a description, a keyless call, and an unknown tool -> exit 1."""
+    done = _sonda(
+        "--no-keys", "--call", "ask_llm", '{"question": "hi"}', "--call", "nope", "{}",
+        "--", sys.executable, str(ROOT / "nvidia_image.py"), cwd=tmp_path,
+    )
+    assert done.returncode == 1, done.stderr  # the unknown tool is an error result
+    out = done.stdout
+    assert "initialize ok: nvidia-nim" in out
+    assert "tools/list: 7 tools" in out
+    assert all(name in out for name in TOOLS)
+    assert "(no description)" not in out
+    assert "no provider configured" in out
+    assert "Unknown tool: nope" in out
 
 
 def test_sonda_usage_and_missing_command_exit_codes(tmp_path):
