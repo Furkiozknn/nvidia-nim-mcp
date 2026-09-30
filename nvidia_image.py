@@ -1017,13 +1017,14 @@ options:
 
 
 def _startup_line() -> str:
-    """One status line for the MCP client's server log. Names which keys are
-    present, never their values."""
-    free = [p["env"] for p in EXTRA_PROVIDERS if os.environ.get(p["env"])]
+    """One status line for the MCP client's server log: which providers have a
+    key, by provider name only - no key value and no variable content."""
+    free = [p["model"].split("/")[0] for p in EXTRA_PROVIDERS if os.environ.get(p["env"])]
+    nvidia = "set" if _api_key() else "NOT set (keyless tiers only)"
     return (
         f"nvidia-nim-mcp {_version() or '(source checkout)'} on stdio: "
-        f"{NVIDIA_API_KEY_ENV} {'set' if _api_key() else 'NOT set (keyless tiers only)'}; "
-        f"free-tier keys: {', '.join(free) or 'none'}; output: {OUTPUT_DIR}"
+        f"NVIDIA key {nvidia}; free-tier providers with a key: {', '.join(free) or 'none'}; "
+        f"output: {OUTPUT_DIR}"
     )
 
 

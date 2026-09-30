@@ -6,6 +6,7 @@ subprocess only does `initialize` + `tools/list`, which need no key and no
 network.
 """
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,7 +61,7 @@ def test_help_prints_the_registration_command_and_exits_zero(capsys):
     nvidia_image.main(["--help"])
     out = capsys.readouterr().out
     assert UVX_COMMAND in out
-    assert "NVIDIA_API_KEY" in out and "build.nvidia.com" in out
+    assert "NVIDIA_API_KEY" in out and re.search(r"build\.nvidia\.com", out)
     assert "output" in out
 
 
@@ -86,21 +87,22 @@ def test_startup_line_names_keys_but_never_their_values(monkeypatch):
     monkeypatch.setenv("NVIDIA_API_KEY", "secret-value-1")
     monkeypatch.setenv("GROQ_API_KEY", "secret-value-2")
     line = nvidia_image._startup_line()
-    assert "NVIDIA_API_KEY set" in line and "GROQ_API_KEY" in line
+    assert "NVIDIA key set" in line and "groq" in line
     assert "secret-value" not in line
 
 
 def test_startup_line_without_keys_says_keyless_tiers_only(monkeypatch):
     for k in KEYS:
         monkeypatch.delenv(k, raising=False)
-    assert "NOT set (keyless tiers only)" in nvidia_image._startup_line()
+    line = nvidia_image._startup_line()
+    assert "NVIDIA key NOT set (keyless tiers only)" in line and "providers with a key: none" in line
 
 
 # --- no key vs wrong key ----------------------------------------------------
 
 def test_no_provider_message_says_where_to_get_and_where_to_put_the_key():
     msg = nvidia_image._no_provider_message("ask_llm", nvidia_image.EXTRA_PROVIDERS)
-    assert "https://build.nvidia.com/" in msg
+    assert re.search(r"https://build\.nvidia\.com/", msg)
     assert "environment of this MCP server" in msg
     assert ".env" in msg
 
