@@ -41,6 +41,7 @@ jobs:
   paketle:
     name: Paketle ve dogrula
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7.6.0
@@ -103,6 +104,7 @@ jobs:
     # oysa paketlemenin CI'da calistigini gormek gerekli.
     if: github.event_name == 'push' || inputs.yayinla
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment:
       name: pypi
       url: https://pypi.org/p/nvidia-nim-mcp
@@ -120,6 +122,7 @@ jobs:
     needs: yayinla
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write
       contents: read
