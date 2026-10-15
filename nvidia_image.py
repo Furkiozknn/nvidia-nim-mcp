@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import urllib.parse
@@ -14,7 +15,7 @@ from pathlib import Path
 import httpx2
 from dotenv import load_dotenv
 from mcp.server import MCPServer
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import CallToolResult, ImageContent, ResourceLink, TextContent, ToolAnnotations
 from pydantic import BaseModel, Field
 from typing import Annotated, Literal
 
@@ -586,7 +587,6 @@ def _no_provider_message(action: str, providers: list[dict]) -> str:
     )
 
 
-@mcp.tool(title="Generate an image", annotations=_REMOTE_WRITES_FILE)
 async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: int = 1024) -> str:
     """Generate an image from a text prompt using NVIDIA NIM image models.
 
@@ -1028,6 +1028,67 @@ def _health_text(rows: list["HealthProbe"]) -> str:
         env = f" ({row.env})" if row.tier == "free-tier fallback" else ""
         lines.append(f"  {'OK ' if row.ok else 'FAIL'} {row.model}{env} - {row.detail}")
     return "\n".join(lines)
+
+
+# --- generate_image as the client sees it --------------------------------
+# generate_image() above returns one of two fixed sentences (or a failure
+# report), and in-process callers and the tests rely on that text. The MCP
+# tool reads the saved path back out of the sentence rather than changing
+# that function: the sentence is this module's own format, pinned by a test,
+# and leaving the function untouched keeps this change out of the fallback
+# logic entirely.
+_SAVED_IMAGE = re.compile(r"^Image saved to (?P<path>.+?) \(model: (?P<model>[^,)]+)(?:, (?P<why>[^)]*))?\)$")
+
+# Larger images are still saved and linked, just not inlined: a client
+# pastes inline images into the model's context, and several MB of base64 is
+# not a reasonable thing to do to it by default.
+INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+
+class ImageResult(BaseModel):
+    path: str = Field(description="absolute path of the saved image")
+    uri: str = Field(description="file:// URI of the same file")
+    model: str = Field(description="model slug, or 'pollinations' for the keyless tier")
+    tier: Literal["nvidia", "pollinations"]
+    note: str | None = Field(description="why the keyless tier was used, if it was")
+    format: str | None = Field(description="jpeg/png/webp/gif, from the file's magic bytes")
+    bytes: int
+    inline: bool = Field(description="whether the image is also returned as image content")
+
+
+def _image_tool_result(text: str) -> CallToolResult:
+    match = _SAVED_IMAGE.match(text)
+    if match is None:
+        # "All image models failed: ..." - a failed call, reported as one.
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+    path = Path(match["path"]).resolve()
+    data = path.read_bytes()
+    fmt = _sniff_image_format(data)
+    inline = fmt is not None and len(data) <= INLINE_IMAGE_MAX_BYTES
+    model = match["model"]
+    result = ImageResult(
+        path=str(path), uri=path.as_uri(), model=model,
+        tier="pollinations" if model == "pollinations" else "nvidia",
+        note=match["why"], format=fmt, bytes=len(data), inline=inline,
+    )
+    content: list = [TextContent(type="text", text=text)]
+    if inline:
+        content.append(ImageContent(type="image", data=base64.b64encode(data).decode("ascii"),
+                                    mime_type=f"image/{fmt}"))
+    content.append(ResourceLink(type="resource_link", uri=result.uri, name=path.name,
+                                mime_type=f"image/{fmt}" if fmt else None))
+    return CallToolResult(content=content, structured_content=result.model_dump(mode="json"))
+
+
+@mcp.tool(
+    name="generate_image", title="Generate an image",
+    description=inspect.cleandoc(generate_image.__doc__ or ""), annotations=_REMOTE_WRITES_FILE,
+)
+async def generate_image_tool(
+    prompt: str, seed: int = 0, width: int = 1024, height: int = 1024
+) -> Annotated[CallToolResult, ImageResult]:
+    text = await generate_image(prompt, seed, width, height)
+    return await asyncio.to_thread(_image_tool_result, text)
 
 
 @mcp.tool(

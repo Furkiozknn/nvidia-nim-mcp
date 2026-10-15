@@ -144,6 +144,18 @@ pick a live model or see which key would unlock a tier without parsing the
 OK/FAIL lines. The text report is byte-identical to before, and the CLI's
 `--check` prints it unchanged.
 
+`generate_image` returns the image itself, not just a path. The content is:
+
+- the unchanged "Image saved to …" sentence;
+- the picture as MCP **image content**, so the client and the model can see it
+  without opening a file (up to 2 MB, and only when the saved bytes really are
+  a JPEG/PNG/WebP/GIF);
+- a `resource_link` to the saved file.
+
+Its `structuredContent` is `{path, uri, model, tier, note, format, bytes,
+inline}`, where `tier` is `nvidia` or `pollinations` and `note` says why the
+keyless tier was used. A call where every model failed is an `isError` result.
+
 ## ▶️ Example usage
 
 Once registered, just ask Claude Code in plain language — it picks the right tool on its own:
