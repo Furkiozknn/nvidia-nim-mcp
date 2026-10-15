@@ -57,6 +57,95 @@ async def test_generate_image_reports_pollinations_error_when_everything_fails(
     assert "pollinations down" in result
 
 
+# --- every NVIDIA failure mode falls through, not just a timeout ---------
+
+
+class _NotJsonResponse(FakeResponse):
+    """A 200 whose body is not JSON (an HTML error page served as success)."""
+
+    def json(self):
+        import json
+
+        return json.loads("<html>oops</html>")
+
+
+@pytest.mark.asyncio
+async def test_connection_error_on_every_nvidia_model_still_reaches_pollinations(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    """A ConnectError is an httpx2 transport error but not a TimeoutException;
+    it used to escape the loop and abort the tool before the keyless tier."""
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    client = fake_async_client(post_side_effect=nvidia_image.httpx2.ConnectError("connection refused"))
+
+    result = await nvidia_image.generate_image(prompt="a cat")
+
+    assert "model: pollinations" in result
+    assert client.post.await_count == len(nvidia_image.IMAGE_MODELS)
+    assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_non_json_200_moves_on_to_the_next_nvidia_model(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    client = fake_async_client(
+        post_side_effect=[
+            _NotJsonResponse(200, text="<html>oops</html>"),
+            FakeResponse(200, json_data={"artifacts": [{"base64": "aGVsbG8="}]}),
+        ]
+    )
+
+    result = await nvidia_image.generate_image(prompt="a cat")
+
+    assert "model: black-forest-labs/flux.2-klein-4b" in result
+    assert client.get.await_count == 0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"artifacts": [{"base64": "not base64!"}]},
+        {"artifacts": [{}]},
+        {"artifacts": ["not-a-dict"]},
+        ["not", "an", "object"],
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_malformed_200_from_every_nvidia_model_still_reaches_pollinations(
+    body, nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(post_side_effect=lambda *a, **kw: FakeResponse(200, json_data=body))
+
+    result = await nvidia_image.generate_image(prompt="a cat")
+
+    assert "model: pollinations" in result
+    assert list(tmp_path.glob("flux*.jpg")) == []
+
+
+@pytest.mark.asyncio
+async def test_transport_and_parse_failures_are_named_when_everything_fails(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(
+        post_side_effect=[
+            nvidia_image.httpx2.ConnectError(f"refused, Bearer {nvidia_key}"),
+            _NotJsonResponse(200),
+        ],
+        get_side_effect=RuntimeError("pollinations down"),
+    )
+
+    result = await nvidia_image.generate_image(prompt="a cat")
+
+    assert "All image models failed" in result
+    assert "flux.1-dev: request failed" in result
+    assert "flux.2-klein-4b: invalid response" in result
+    assert nvidia_key not in result
+
+
 @pytest.mark.asyncio
 async def test_probe_pollinations_ok():
     from unittest.mock import AsyncMock
