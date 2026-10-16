@@ -65,6 +65,44 @@ async def test_describe_image_falls_back_to_vision_provider_when_nvidia_fails(
     assert "model: groq/qwen/qwen3.6-27b" in result
 
 
+@pytest.mark.parametrize(
+    "post_side_effect",
+    [
+        nvidia_image.httpx2.ConnectError("connection refused"),
+        lambda *a, **kw: FakeResponse(200, {"choices": None}),
+    ],
+    ids=["connect-error", "malformed-200"],
+)
+@pytest.mark.asyncio
+async def test_describe_image_reaches_the_vision_provider_on_transport_or_parse_errors(
+    post_side_effect, nvidia_key, fake_async_client, sample_image, monkeypatch
+):
+    """Not just a timeout or a non-200: a refused connection or a 200 with
+    the wrong shape must also fall through to the free-tier provider."""
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    for provider in nvidia_image.VISION_PROVIDERS:
+        if provider["env"] != "GROQ_API_KEY":
+            monkeypatch.delenv(provider["env"], raising=False)
+    client = fake_async_client(post_side_effect=post_side_effect)
+
+    class FakeMessage:
+        content = "from fallback"
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeCompletionResponse:
+        choices = [FakeChoice()]
+        model = "groq/qwen/qwen3.6-27b"
+
+    monkeypatch.setattr(nvidia_image.litellm, "acompletion", AsyncMock(return_value=FakeCompletionResponse()))
+
+    result = await nvidia_image.describe_image(image_path=sample_image)
+
+    assert "from fallback" in result
+    assert client.post.await_count == len(nvidia_image.VISION_MODELS)
+
+
 @pytest.mark.asyncio
 async def test_describe_image_reports_failure_when_nvidia_and_fallback_both_fail(
     nvidia_key, fake_async_client, sample_image, monkeypatch
