@@ -396,13 +396,19 @@ async def _chat_with_fallback(
             resp = await client.post(CHAT_URL, headers=headers, json=body, timeout=18.0)
         except httpx2.TimeoutException:
             continue
+        except httpx2.HTTPError as e:
+            # Any other transport failure is a failed model, not a reason to
+            # skip the caller's cross-provider fallback by raising.
+            logger.warning("%s: request failed: %s", model, _redact(str(e), _api_key()))
+            continue
         if resp.status_code != 200:
             if problems is not None and _is_auth_status(resp.status_code):
                 problems.append(AUTH_REJECTED)
             continue
         try:
             content = resp.json()["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, json.JSONDecodeError):
+        except (KeyError, IndexError, TypeError, ValueError):
+            # ValueError covers json.JSONDecodeError; TypeError a null field.
             continue
         return content, model
     return None
@@ -627,6 +633,13 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                 except httpx2.TimeoutException:
                     errors.append(f"{model['slug']}: timed out")
                     continue
+                except httpx2.HTTPError as e:
+                    # Connection refused, DNS, TLS, a dropped stream: not a
+                    # timeout, but just as much a failed tier. Letting it
+                    # escape aborted the whole chain and the keyless
+                    # Pollinations tier below never ran.
+                    errors.append(f"{model['slug']}: request failed - {_redact(str(e), api_key)}")
+                    continue
                 if resp.status_code != 200:
                     if _is_auth_status(resp.status_code):
                         problems.append(AUTH_REJECTED)
@@ -634,16 +647,21 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                         f"{model['slug']}: {_http_detail(resp.status_code)} - {_redact(resp.text[:150], api_key)}"
                     )
                     continue
-                data = resp.json()
-                artifacts = data.get("artifacts")
-                if not artifacts:
+                # A 200 is only a claim: a non-JSON body, an unexpected shape
+                # or bad base64 is a failed model too, not a crash of the tool.
+                try:
+                    artifacts = resp.json().get("artifacts")
+                    image_bytes = base64.b64decode(artifacts[0]["base64"]) if artifacts else None
+                except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+                    errors.append(f"{model['slug']}: invalid response ({type(e).__name__})")
+                    continue
+                if not image_bytes:
                     errors.append(f"{model['slug']}: no artifacts in response")
                     continue
-                img_b64 = artifacts[0]["base64"]
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 filepath = OUTPUT_DIR / f"{model['slug'].split('/')[-1]}_{_stamp()}.jpg"
                 # Blocking disk write - off the event loop, not inline here.
-                await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
+                await asyncio.to_thread(filepath.write_bytes, image_bytes)
                 return f"Image saved to {filepath} (model: {model['slug']})"
         else:
             errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set")
@@ -880,10 +898,18 @@ async def create_embedding(text: str) -> str:
     else:
         request_error = f"{NVIDIA_API_KEY_ENV} not set in .env - NVIDIA tier skipped"
 
+    vector = None
     if resp is not None and resp.status_code == 200:
-        vector = resp.json()["data"][0]["embedding"]
-        model_used = EMBED_MODEL
-    else:
+        try:
+            vector = resp.json()["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            # A 200 whose body is not an embedding is a failed tier like any
+            # other: fall through to the local model instead of crashing.
+            request_error = f"invalid response from NVIDIA ({type(e).__name__})"
+            resp = None
+        else:
+            model_used = EMBED_MODEL
+    if vector is None:
         vector = await asyncio.to_thread(_local_embedding, text)
         model_used = f"local:{_LOCAL_EMBED_MODEL_NAME}"
 

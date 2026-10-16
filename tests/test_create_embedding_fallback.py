@@ -74,6 +74,32 @@ async def test_falls_back_to_local_embedding_on_connection_error_not_just_timeou
 
 
 @pytest.mark.asyncio
+async def test_falls_back_to_local_embedding_on_a_malformed_200(nvidia_key, fake_async_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(post_side_effect=lambda *a, **kw: FakeResponse(200, {"data": []}))
+    monkeypatch.setattr(nvidia_image, "_local_embedding", lambda text: [0.4, 0.5])
+
+    result = await nvidia_image.create_embedding(text="hello world")
+
+    assert "2 dimensions" in result
+    assert f"model: local:{nvidia_image._LOCAL_EMBED_MODEL_NAME}" in result
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_200_with_no_local_fallback_is_reported_not_raised(
+    nvidia_key, fake_async_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(nvidia_image, "OUTPUT_DIR", tmp_path)
+    fake_async_client(post_side_effect=lambda *a, **kw: FakeResponse(200, {"data": [{}]}))
+    monkeypatch.setattr(nvidia_image, "_local_embedding", lambda text: None)
+
+    result = await nvidia_image.create_embedding(text="hello world")
+
+    assert "invalid response from NVIDIA" in result
+    assert "no local fallback available" in result
+
+
+@pytest.mark.asyncio
 async def test_reports_clear_error_when_nvidia_fails_and_no_local_fallback_installed(
     nvidia_key, fake_async_client, tmp_path, monkeypatch
 ):
