@@ -129,6 +129,21 @@ It prints `initialize ok`, the seven tools and how long the start took (about 4 
 
 When a key is wrong, the tool says so instead of the generic "failed or timed out": `NVIDIA_API_KEY` set but rejected gives `HTTP 401 (key rejected - check the API key)` from `check_provider_health`, and the failing tool appends a line naming the fix. With no key at all, a tool that needs one answers with the list of keys that would work and where to set them.
 
+### What an MCP client sees besides the text
+
+Every tool has a title and MCP behaviour hints. All seven are **open-world**:
+the prompt, text or image goes to NVIDIA or a free-tier provider.
+`generate_image` and `create_embedding` write a new, uniquely named file and are
+marked not read-only but **not destructive**. The others are read-only. None is
+idempotent, because each call is a fresh model request.
+
+`check_provider_health` also publishes an `outputSchema` and returns
+`structuredContent`: `{ok, failed, probes: [{group, model, ok, detail, tier,
+env}]}`, where `tier` is `nvidia`, `keyless` or `free-tier fallback`. An agent can
+pick a live model or see which key would unlock a tier without parsing the
+OK/FAIL lines. The text report is byte-identical to before, and the CLI's
+`--check` prints it unchanged.
+
 ## ▶️ Example usage
 
 Once registered, just ask Claude Code in plain language — it picks the right tool on its own:
