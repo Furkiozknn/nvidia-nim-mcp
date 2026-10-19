@@ -269,30 +269,55 @@ def _build_chat_chain(nvidia_models: list[str]) -> list[dict]:
     return chain
 
 
+def _redact_known_keys(text: str) -> str:
+    """_redact for every provider key currently set, not just one. For
+    messages that may come from any provider in a chain (litellm exception
+    text), where the caller cannot know which key could be echoed."""
+    for secret in (_api_key(), *(os.environ.get(p["env"]) for p in (*EXTRA_PROVIDERS, *VISION_PROVIDERS))):
+        text = _redact(text, secret)
+    return text
+
+
 async def _run_chat_chain(
     chain: list[dict], messages: list[dict], max_tokens: int = 1024, problems: list[str] | None = None
 ) -> tuple[str, str] | None:
-    """Execute a pre-built litellm provider chain (primary + fallbacks).
+    """Try each entry of a pre-built provider chain in order and return
+    (content, model) from the first one that answers with text, or None.
     Shared by _multi_provider_chat (NVIDIA-prefixed) and
     _chat_via_provider_chain (cross-provider only) so the actual
-    execution/error-handling logic exists in exactly one place."""
-    if not chain:
-        return None
-    primary, fallbacks = chain[0], chain[1:]
-    try:
-        response = await litellm.acompletion(
-            messages=messages,
-            max_tokens=max_tokens,
-            fallbacks=fallbacks or None,
-            timeout=LLM_TIMEOUT,
-            **primary,
-        )
-    except Exception as e:
-        logger.warning("all providers in chain failed: %s", e)
-        if problems is not None and _is_auth_error(e):
-            problems.append(AUTH_REJECTED)
-        return None
-    return response.choices[0].message.content, response.model
+    execution/error-handling logic exists in exactly one place.
+
+    Each entry is its own litellm call with only its own kwargs. litellm's
+    `fallbacks=` parameter is deliberately not used: it copies the primary
+    call's kwargs into every fallback, so with NVIDIA first, the Groq and
+    Mistral entries inherited NVIDIA's api_base - their keys were sent to
+    NVIDIA's endpoint and the cross-provider fallback could never answer.
+
+    max_retries=0: the chain is the retry. litellm's default retried each
+    entry again (with backoff) before the next model got a turn.
+    """
+    for entry in chain:
+        try:
+            response = await litellm.acompletion(
+                messages=messages,
+                max_tokens=max_tokens,
+                timeout=LLM_TIMEOUT,
+                max_retries=0,
+                **entry,
+            )
+            content = response.choices[0].message.content
+        except Exception as e:
+            logger.warning("%s failed: %s", entry["model"], _redact_known_keys(str(e)))
+            if problems is not None and _is_auth_error(e) and AUTH_REJECTED not in problems:
+                problems.append(AUTH_REJECTED)
+            continue
+        if not content:
+            # A reasoning model can spend the whole max_tokens budget before
+            # writing any answer; an empty reply is a failed tier, not a result.
+            logger.warning("%s returned no text", entry["model"])
+            continue
+        return content, response.model
+    return None
 
 
 async def _multi_provider_chat(
