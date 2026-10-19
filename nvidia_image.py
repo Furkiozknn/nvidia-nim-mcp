@@ -1,9 +1,11 @@
 import asyncio
 import base64
 import importlib.metadata
+import inspect
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import urllib.parse
@@ -13,8 +15,22 @@ from pathlib import Path
 import httpx2
 from dotenv import load_dotenv
 from mcp.server import MCPServer
+from mcp.types import CallToolResult, ImageContent, ResourceLink, TextContent, ToolAnnotations
+from pydantic import BaseModel, Field
+from typing import Annotated, Literal
 
 load_dotenv()
+
+# Behaviour hints (MCP 2025-03-26+). Every tool here is open-world: its
+# input goes to NVIDIA or to a free-tier provider (Groq, Mistral, Gemini,
+# Cerebras, Pollinations). The text tools change nothing on this machine;
+# generate_image and create_embedding write a new, uniquely named file and
+# never overwrite one, so they are not destructive. Nothing is idempotent:
+# each call is a fresh model request.
+_REMOTE_READ = ToolAnnotations(read_only_hint=True, idempotent_hint=False, open_world_hint=True)
+_REMOTE_WRITES_FILE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=True
+)
 
 logger = logging.getLogger(__name__)
 
@@ -381,13 +397,19 @@ async def _chat_with_fallback(
             resp = await client.post(CHAT_URL, headers=headers, json=body, timeout=18.0)
         except httpx2.TimeoutException:
             continue
+        except httpx2.HTTPError as e:
+            # Any other transport failure is a failed model, not a reason to
+            # skip the caller's cross-provider fallback by raising.
+            logger.warning("%s: request failed: %s", model, _redact(str(e), _api_key()))
+            continue
         if resp.status_code != 200:
             if problems is not None and _is_auth_status(resp.status_code):
                 problems.append(AUTH_REJECTED)
             continue
         try:
             content = resp.json()["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, json.JSONDecodeError):
+        except (KeyError, IndexError, TypeError, ValueError):
+            # ValueError covers json.JSONDecodeError; TypeError a null field.
             continue
         return content, model
     return None
@@ -571,7 +593,6 @@ def _no_provider_message(action: str, providers: list[dict]) -> str:
     )
 
 
-@mcp.tool()
 async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: int = 1024) -> str:
     """Generate an image from a text prompt using NVIDIA NIM image models.
 
@@ -612,6 +633,13 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                 except httpx2.TimeoutException:
                     errors.append(f"{model['slug']}: timed out")
                     continue
+                except httpx2.HTTPError as e:
+                    # Connection refused, DNS, TLS, a dropped stream: not a
+                    # timeout, but just as much a failed tier. Letting it
+                    # escape aborted the whole chain and the keyless
+                    # Pollinations tier below never ran.
+                    errors.append(f"{model['slug']}: request failed - {_redact(str(e), api_key)}")
+                    continue
                 if resp.status_code != 200:
                     if _is_auth_status(resp.status_code):
                         problems.append(AUTH_REJECTED)
@@ -619,16 +647,21 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
                         f"{model['slug']}: {_http_detail(resp.status_code)} - {_redact(resp.text[:150], api_key)}"
                     )
                     continue
-                data = resp.json()
-                artifacts = data.get("artifacts")
-                if not artifacts:
+                # A 200 is only a claim: a non-JSON body, an unexpected shape
+                # or bad base64 is a failed model too, not a crash of the tool.
+                try:
+                    artifacts = resp.json().get("artifacts")
+                    image_bytes = base64.b64decode(artifacts[0]["base64"]) if artifacts else None
+                except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+                    errors.append(f"{model['slug']}: invalid response ({type(e).__name__})")
+                    continue
+                if not image_bytes:
                     errors.append(f"{model['slug']}: no artifacts in response")
                     continue
-                img_b64 = artifacts[0]["base64"]
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 filepath = OUTPUT_DIR / f"{model['slug'].split('/')[-1]}_{_stamp()}.jpg"
                 # Blocking disk write - off the event loop, not inline here.
-                await asyncio.to_thread(filepath.write_bytes, base64.b64decode(img_b64))
+                await asyncio.to_thread(filepath.write_bytes, image_bytes)
                 return f"Image saved to {filepath} (model: {model['slug']})"
         else:
             errors.append(f"NVIDIA models skipped: {NVIDIA_API_KEY_ENV} not set")
@@ -647,7 +680,7 @@ async def generate_image(prompt: str, seed: int = 0, width: int = 1024, height: 
     return "All image models failed:\n" + "\n".join(errors) + _key_hint(problems)
 
 
-@mcp.tool()
+@mcp.tool(title="Translate text", annotations=_REMOTE_READ)
 async def translate_text(text: str, target_language: str) -> str:
     """Translate text to a target language using NVIDIA NIM models.
 
@@ -675,7 +708,7 @@ async def translate_text(text: str, target_language: str) -> str:
     return f"{content}\n\n(model: {model})"
 
 
-@mcp.tool()
+@mcp.tool(title="Ask another LLM", annotations=_REMOTE_READ)
 async def ask_llm(question: str, system_prompt: str | None = None) -> str:
     """Ask a question to an alternative LLM (not Claude) via NVIDIA NIM, with
     automatic fallback to Gemini/Groq/Mistral if those API keys are set.
@@ -707,7 +740,7 @@ async def ask_llm(question: str, system_prompt: str | None = None) -> str:
     return f"{content}\n\n(model: {model})"
 
 
-@mcp.tool()
+@mcp.tool(title="Describe an image", annotations=_REMOTE_READ)
 async def describe_image(image_path: str, question: str = "Describe this image in detail.") -> str:
     """Analyze/describe a local image using an NVIDIA NIM vision-language model.
 
@@ -775,7 +808,7 @@ async def describe_image(image_path: str, question: str = "Describe this image i
     return f"{content}\n\n(model: {model})"
 
 
-@mcp.tool()
+@mcp.tool(title="Check content safety", annotations=_REMOTE_READ)
 async def check_content_safety(text: str) -> str:
     """Check whether text is safe/appropriate using NVIDIA's content-safety NIM.
 
@@ -827,7 +860,7 @@ async def check_content_safety(text: str) -> str:
     return f"{content}\n\n(best-effort fallback verdict from {model}, not the dedicated NVIDIA safety model)"
 
 
-@mcp.tool()
+@mcp.tool(title="Create an embedding", annotations=_REMOTE_WRITES_FILE)
 async def create_embedding(text: str) -> str:
     """Create a semantic embedding vector for text, for search/RAG use cases.
 
@@ -865,10 +898,18 @@ async def create_embedding(text: str) -> str:
     else:
         request_error = f"{NVIDIA_API_KEY_ENV} not set in .env - NVIDIA tier skipped"
 
+    vector = None
     if resp is not None and resp.status_code == 200:
-        vector = resp.json()["data"][0]["embedding"]
-        model_used = EMBED_MODEL
-    else:
+        try:
+            vector = resp.json()["data"][0]["embedding"]
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            # A 200 whose body is not an embedding is a failed tier like any
+            # other: fall through to the local model instead of crashing.
+            request_error = f"invalid response from NVIDIA ({type(e).__name__})"
+            resp = None
+        else:
+            model_used = EMBED_MODEL
+    if vector is None:
         vector = await asyncio.to_thread(_local_embedding, text)
         model_used = f"local:{_LOCAL_EMBED_MODEL_NAME}"
 
@@ -895,7 +936,21 @@ async def create_embedding(text: str) -> str:
     return f"Embedding saved to {filepath} ({len(vector)} dimensions, model: {model_used})"
 
 
-@mcp.tool()
+class HealthProbe(BaseModel):
+    group: str = Field(description="the tool (or fallback chain) this model serves")
+    model: str
+    ok: bool
+    detail: str
+    tier: Literal["nvidia", "keyless", "free-tier fallback"]
+    env: str | None = Field(description="the API key variable this probe depends on, if any")
+
+
+class HealthReport(BaseModel):
+    ok: int = Field(description="probes that answered")
+    failed: int
+    probes: list[HealthProbe]
+
+
 async def check_provider_health() -> str:
     """Check which configured NVIDIA models and cross-provider fallbacks are
     currently reachable, without generating any real content.
@@ -914,6 +969,10 @@ async def check_provider_health() -> str:
     Runs with or without NVIDIA_API_KEY: unset, the NVIDIA rows report
     "not configured" and only the keyless/free-tier probes actually fire.
     """
+    return _health_text(await _health_rows())
+
+
+async def _health_rows() -> list[HealthProbe]:
     # Deliberately NOT gated on NVIDIA_API_KEY: a diagnostic that refuses to
     # run without a key is useless to exactly the caller who needs it. The
     # NVIDIA rows report "not configured" instead of being probed.
@@ -955,38 +1014,123 @@ async def check_provider_health() -> str:
     image_status = dict(zip(image_slugs, image_results))
     free_provider_status = dict(zip((p["model"] for p in free_providers), free_provider_results))
 
-    def fmt_group(lines: list[str], title: str, models: list[str], status: dict) -> None:
-        lines.append(f"{title}:")
+    # One row per probe, in report order. The text report below and the
+    # structured result (check_provider_health_tool) are two views of these
+    # rows, so they cannot disagree.
+    rows: list[HealthProbe] = []
+
+    def add(group: str, model: str, ok: bool, detail: str, *, tier: str, env: str | None = None) -> None:
+        rows.append(HealthProbe(group=group, model=model, ok=ok, detail=detail, tier=tier, env=env))
+
+    for slug in image_slugs:
+        add("generate_image", slug, *image_status[slug], tier="nvidia", env=NVIDIA_API_KEY_ENV)
+    add("generate_image", "pollinations (fallback)", *pollinations_result, tier="keyless")
+    for group, models in (("translate_text", TRANSLATE_MODELS), ("ask_llm", LLM_MODELS),
+                          ("describe_image", VISION_MODELS), ("check_content_safety", [SAFETY_MODEL])):
         for m in models:
-            ok, detail = status[m]
-            lines.append(f"  {'OK ' if ok else 'FAIL'} {m} - {detail}")
+            add(group, m, *chat_status[m], tier="nvidia", env=NVIDIA_API_KEY_ENV)
+    add("create_embedding", EMBED_MODEL, *embed_result, tier="nvidia", env=NVIDIA_API_KEY_ENV)
+    for group, providers in ((FALLBACK_TEXT_GROUP, EXTRA_PROVIDERS), (FALLBACK_VISION_GROUP, VISION_PROVIDERS)):
+        for provider in providers:
+            add(group, provider["model"], *free_provider_status[provider["model"]],
+                tier="free-tier fallback", env=provider["env"])
+    return rows
 
+
+FALLBACK_TEXT_GROUP = "Cross-provider fallback (translate_text / ask_llm / check_content_safety)"
+FALLBACK_VISION_GROUP = "Cross-provider fallback (describe_image only)"
+
+
+def _health_text(rows: list["HealthProbe"]) -> str:
+    """The report text, unchanged from before the rows existed."""
     lines: list[str] = ["NVIDIA NIM provider health check:", ""]
-    fmt_group(lines, "generate_image", image_slugs, image_status)
-    poll_ok, poll_detail = pollinations_result
-    lines.append(f"  {'OK ' if poll_ok else 'FAIL'} pollinations (fallback) - {poll_detail}")
-    fmt_group(lines, "translate_text", TRANSLATE_MODELS, chat_status)
-    fmt_group(lines, "ask_llm", LLM_MODELS, chat_status)
-    fmt_group(lines, "describe_image", VISION_MODELS, chat_status)
-    fmt_group(lines, "check_content_safety", [SAFETY_MODEL], chat_status)
-
-    embed_ok, embed_detail = embed_result
-    lines.append("create_embedding:")
-    lines.append(f"  {'OK ' if embed_ok else 'FAIL'} {EMBED_MODEL} - {embed_detail}")
-
-    lines.append("")
-    lines.append("Cross-provider fallback (translate_text / ask_llm / check_content_safety):")
-    for provider in EXTRA_PROVIDERS:
-        ok, detail = free_provider_status[provider["model"]]
-        lines.append(f"  {'OK ' if ok else 'FAIL'} {provider['model']} ({provider['env']}) - {detail}")
-
-    lines.append("")
-    lines.append("Cross-provider fallback (describe_image only):")
-    for provider in VISION_PROVIDERS:
-        ok, detail = free_provider_status[provider["model"]]
-        lines.append(f"  {'OK ' if ok else 'FAIL'} {provider['model']} ({provider['env']}) - {detail}")
-
+    current = None
+    for row in rows:
+        if row.group != current:
+            if row.group.startswith("Cross-provider"):
+                lines.append("")
+            lines.append(f"{row.group}:")
+            current = row.group
+        env = f" ({row.env})" if row.tier == "free-tier fallback" else ""
+        lines.append(f"  {'OK ' if row.ok else 'FAIL'} {row.model}{env} - {row.detail}")
     return "\n".join(lines)
+
+
+# --- generate_image as the client sees it --------------------------------
+# generate_image() above returns one of two fixed sentences (or a failure
+# report), and in-process callers and the tests rely on that text. The MCP
+# tool reads the saved path back out of the sentence rather than changing
+# that function: the sentence is this module's own format, pinned by a test,
+# and leaving the function untouched keeps this change out of the fallback
+# logic entirely.
+_SAVED_IMAGE = re.compile(r"^Image saved to (?P<path>.+?) \(model: (?P<model>[^,)]+)(?:, (?P<why>[^)]*))?\)$")
+
+# Larger images are still saved and linked, just not inlined: a client
+# pastes inline images into the model's context, and several MB of base64 is
+# not a reasonable thing to do to it by default.
+INLINE_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+
+
+class ImageResult(BaseModel):
+    path: str = Field(description="absolute path of the saved image")
+    uri: str = Field(description="file:// URI of the same file")
+    model: str = Field(description="model slug, or 'pollinations' for the keyless tier")
+    tier: Literal["nvidia", "pollinations"]
+    note: str | None = Field(description="why the keyless tier was used, if it was")
+    format: str | None = Field(description="jpeg/png/webp/gif, from the file's magic bytes")
+    bytes: int
+    inline: bool = Field(description="whether the image is also returned as image content")
+
+
+def _image_tool_result(text: str) -> CallToolResult:
+    match = _SAVED_IMAGE.match(text)
+    if match is None:
+        # "All image models failed: ..." - a failed call, reported as one.
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+    path = Path(match["path"]).resolve()
+    data = path.read_bytes()
+    fmt = _sniff_image_format(data)
+    inline = fmt is not None and len(data) <= INLINE_IMAGE_MAX_BYTES
+    model = match["model"]
+    result = ImageResult(
+        path=str(path), uri=path.as_uri(), model=model,
+        tier="pollinations" if model == "pollinations" else "nvidia",
+        note=match["why"], format=fmt, bytes=len(data), inline=inline,
+    )
+    content: list = [TextContent(type="text", text=text)]
+    if inline:
+        content.append(ImageContent(type="image", data=base64.b64encode(data).decode("ascii"),
+                                    mime_type=f"image/{fmt}"))
+    content.append(ResourceLink(type="resource_link", uri=result.uri, name=path.name,
+                                mime_type=f"image/{fmt}" if fmt else None))
+    return CallToolResult(content=content, structured_content=result.model_dump(mode="json"))
+
+
+@mcp.tool(
+    name="generate_image", title="Generate an image",
+    description=inspect.cleandoc(generate_image.__doc__ or ""), annotations=_REMOTE_WRITES_FILE,
+)
+async def generate_image_tool(
+    prompt: str, seed: int = 0, width: int = 1024, height: int = 1024
+) -> Annotated[CallToolResult, ImageResult]:
+    text = await generate_image(prompt, seed, width, height)
+    return await asyncio.to_thread(_image_tool_result, text)
+
+
+@mcp.tool(
+    name="check_provider_health", title="Check provider health",
+    description=inspect.cleandoc(check_provider_health.__doc__ or ""), annotations=_REMOTE_READ,
+)
+async def check_provider_health_tool() -> Annotated[CallToolResult, HealthReport]:
+    """The same report as check_provider_health(), plus one structured row
+    per probe (group, model, ok, detail, tier, env), so a client or an agent
+    can pick a live model without parsing OK/FAIL lines."""
+    rows = await _health_rows()
+    report = HealthReport(ok=sum(r.ok for r in rows), failed=sum(not r.ok for r in rows), probes=rows)
+    return CallToolResult(
+        content=[TextContent(type="text", text=_health_text(rows))],
+        structured_content=report.model_dump(mode="json"),
+    )
 
 
 HELP = """\
