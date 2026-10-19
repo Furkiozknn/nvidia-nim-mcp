@@ -162,10 +162,15 @@ def _redact(text: str, secret: str | None) -> str:
     return text.replace(secret, "***")
 
 
-def _read_image_b64(path: Path) -> str:
-    """Read an image file and base64-encode it. Blocking disk I/O - always
-    called through asyncio.to_thread, never inline in an async def."""
-    return base64.b64encode(path.read_bytes()).decode()
+def _read_image_bytes(path: Path) -> bytes | None:
+    """Read at most DESCRIBE_IMAGE_MAX_BYTES of an image file, or None if it
+    is larger. The size is enforced on the read itself, not only on an
+    earlier stat(): a file that grows between the check and the read must
+    not turn into an unbounded upload. Blocking disk I/O - always called
+    through asyncio.to_thread, never inline in an async def."""
+    with path.open("rb") as f:
+        data = f.read(DESCRIBE_IMAGE_MAX_BYTES + 1)
+    return None if len(data) > DESCRIBE_IMAGE_MAX_BYTES else data
 
 # Every model below was confirmed working with a real request (2026-08-22)
 # before being wired in - see new-mcp-server skill for why that matters.
@@ -199,6 +204,9 @@ POLLINATIONS_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 # as voice-io-mcp's speech_to_text limits.
 DESCRIBE_IMAGE_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 DESCRIBE_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+# The extension is only a filename; these are the formats the file's own
+# signature must show before any byte is uploaded (see _sniff_image_format).
+DESCRIBE_IMAGE_ALLOWED_FORMATS = {"jpeg", "png", "webp"}
 
 # Passed to every litellm chain call. litellm's own default is 600 seconds -
 # a wedged provider would otherwise hold a tool call for ten minutes, far
@@ -775,7 +783,8 @@ async def describe_image(image_path: str, question: str = "Describe this image i
     Needs NVIDIA_API_KEY *or* one of GROQ/MISTRAL/GEMINI_API_KEY - there is no
     keyless vision tier, so with none of them set this fails fast and says so.
     The file is uploaded (base64) to NVIDIA, or to the fallback provider that
-    is configured; only jpg/jpeg/png/webp up to 10 MB are accepted.
+    is configured; only JPEG/PNG/WebP files (checked by file signature, not
+    just extension) up to 10 MB are accepted.
 
     Args:
         image_path: Absolute path to a local image file (jpg/jpeg/png/webp).
@@ -805,10 +814,25 @@ async def describe_image(image_path: str, question: str = "Describe this image i
             f"File too large to upload: {image_path} is {size} bytes; the limit is "
             f"{DESCRIBE_IMAGE_MAX_BYTES} (base64 inflates it by a third on top)."
         )
-    mime = "jpeg" if ext in ("jpg", "jpeg") else ext
     # Blocking disk read - off the event loop, same rule as every other
     # file access in this module.
-    img_b64 = await asyncio.to_thread(_read_image_b64, path)
+    try:
+        data = await asyncio.to_thread(_read_image_bytes, path)
+    except OSError as e:
+        return f"Cannot read {image_path}: {e.strerror or e}"
+    if data is None:
+        return f"File too large to upload: {image_path} grew past {DESCRIBE_IMAGE_MAX_BYTES} bytes while being read."
+    # The extension alone is only a filename: check the bytes before they
+    # leave the machine, so a renamed key or document is never uploaded.
+    # The sniffed format also names the data URL correctly for the common
+    # case of a JPEG saved as .png.
+    mime = _sniff_image_format(data)
+    if mime not in DESCRIBE_IMAGE_ALLOWED_FORMATS:
+        return (
+            f"Not uploading {image_path}: its contents are not a JPEG, PNG or WebP image "
+            "(checked by file signature, not by extension)."
+        )
+    img_b64 = base64.b64encode(data).decode()
 
     messages = [
         {
