@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-76b900?style=flat-square)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-76b900?style=flat-square)](pyproject.toml)
 [![MCP Server](https://img.shields.io/badge/MCP-server-76b900?style=flat-square)](https://modelcontextprotocol.io)
-[![Cost](https://img.shields.io/badge/cost-%240-76b900?style=flat-square)](#-setup)
+[![Cost](https://img.shields.io/badge/cost-%240-76b900?style=flat-square)](#%EF%B8%8F-setup)
 
 </div>
 
@@ -36,8 +36,8 @@ The idea is simple: **a model being slow, rate-limited, or quietly retired shoul
 
 - [Tools](#-tools)
 - [The fallback chain](#-the-fallback-chain)
-- [Setup](#-setup)
-- [Example usage](#-example-usage)
+- [Setup](#%EF%B8%8F-setup)
+- [Example usage](#%EF%B8%8F-example-usage)
 - [Output files](#-output-files)
 - [Development](#-development)
 - [Testing](#-testing)
@@ -243,7 +243,7 @@ nvidia-nim-mcp/
 ├── scripts/            # sonda.py (stdio probe), demo-uret.py + demo-kayit.js (the terminal demo)
 ├── docs/               # DENETIM.md (measured audit), TASARIM.md (design), demo/ (recording)
 ├── tests/               # pytest suite, fully mocked, no API key needed
-├── pyproject.toml      # uv project + dependencies (httpx, litellm, mcp)
+├── pyproject.toml      # uv project + dependencies (httpx2, litellm, mcp, python-dotenv)
 ├── .env.example        # copy to .env and fill in your keys
 ├── .github/workflows/  # CI: uv sync --group dev && uv run pytest
 ├── output/             # generated images + embeddings land here
